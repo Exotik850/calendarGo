@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"fmt"
 	"log"
@@ -14,28 +13,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"google.golang.org/api/calendar/v3"
-	"googlemaps.github.io/maps"
 )
-
-type SortedSlice[T any] []T
-
-func (s SortedSlice[T]) Len() int      { return len(s) }
-func (s SortedSlice[T]) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-func (d Day) InsertFunc(t *calendar.Event, cmp func(*calendar.Event, *calendar.Event) int) Day {
-	i, _ := slices.BinarySearchFunc(d.Events, t, cmp) // find slot
-	d.Events = slices.Insert(d.Events, i, t)
-	return d
-}
-
-func createMapService() *maps.Client {
-	apiKey := os.Getenv("GOOGLE_MAPS_API_KEY")
-	mapService, err := maps.NewClient(maps.WithAPIKey(apiKey))
-	if err != nil {
-		log.Fatalf("Unable to create map service: %v", err)
-	}
-	return mapService
-}
 
 var reader = bufio.NewReader(os.Stdin)
 
@@ -87,15 +65,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to read input: %v", err)
 	}
-	// numHours, err := readNumber("Enter the number of hours for the event:")
-	// if err != nil {
-	// 	log.Fatalf("Unable to read input: %v", err)
-	// }
-	// lenience, err := readNumber("Enter the number of minutes of lenience:\n\t(If there is an overlap of this many minutes, the event will still be considered to be able to be attended):")
-	// if err != nil {
-	// 	log.Fatalf("Unable to read input: %v", err)
-	// }
-	// lenienceMinutes := time.Duration(lenience) * time.Minute
+	numHours, err := readNumber("Enter the number of hours for the event:")
+	if err != nil {
+		log.Fatalf("Unable to read input: %v", err)
+	}
+	lenience, err := readNumber("Enter the number of minutes of lenience:\n\t(If there is an overlap of this many minutes, the event will still be considered to be able to be attended):")
+	if err != nil {
+		log.Fatalf("Unable to read input: %v", err)
+	}
+	lenienceMinutes := time.Duration(lenience) * time.Minute
 
 	// Print the available calendars
 	cals, err := calendarService.CalendarList.List().Do()
@@ -145,87 +123,43 @@ func main() {
 	}
 
 	// group events by day
-	days := groupEventsByDay(allEvents, err)
-	sortedDays := make([]time.Time, len(days))
-	for d := range days {
-		sortedDays = append(sortedDays, d)
-	}
-	slices.SortFunc(sortedDays, func(i, j time.Time) int {
-		switch {
-		case i.Before(j):
-			return -1
-		case i.After(j):
-			return 1
-		default:
-			return 0
+	days := groupEventsByDay(allEvents)
+
+	sortedDays := make([]Date, len(days))
+	for d, sch := range days {
+		if len(sch.Events) > 0 {
+			sortedDays = append(sortedDays, d)
 		}
+	}
+	slices.SortFunc(sortedDays, func(i, j Date) int {
+		return i.Compare(j)
 	})
 	for _, d := range sortedDays {
-		day := days[d]
-		fmt.Println(day.Day)
+		day, found := days[d]
+		if !found {
+			continue
+		}
+		fmt.Println(d.Time().Format("Monday, January 2, 2006"))
 		for _, event := range day.Events {
 			fmt.Printf("\t%v\n", event.Summary)
 		}
 	}
-	return // Remove this line to continue
 
-	// addresses := make([]string, len(allEvents))
-	// foundEvents := []*calendar.Event{}
-	// for id, day := range days {
-	// 	for ie := 0; ie < len(day.Events); ie++ {
-	// 		event := day.Events[ie]
-	// 		if event.Location == "" {
-	// 			log.Printf("Event %v has no location, skipping", event.Summary)
-	// 			continue
-	// 		}
-	// 		if event.Start == nil || event.End == nil {
-	// 			log.Printf("Event %v has no start or no end time, skipping", event.Summary)
-	// 			continue
-	// 		}
-	// 		sTime, err := time.Parse(time.RFC3339, event.Start.DateTime)
-	// 		if err != nil {
-	// 			log.Fatalf("Unable to parse date: %v", err)
-	// 		}
-	// 		eTime, err := time.Parse(time.RFC3339, event.End.DateTime)
-	// 		if err != nil {
-	// 			log.Fatalf("Unable to parse date: %v", err)
-	// 		}
-	// 		// If it starts at 9am or ends at 5pm, we can't make it
-	// 		if sTime.Hour() == 9 || eTime.Hour() == 17 {
-	// 			log.Printf("Event %v starts at 9am or ends at 5pm, skipping", event.Summary)
-	// 			continue
-	// 		}
-	// 		getNext := false
-	// 		if ie != len(day.Events)-1 {
-	// 			sTimeNext, err := time.Parse(time.RFC3339, day.Events[ie+1].Start.DateTime)
-	// 			if err != nil {
-	// 				log.Fatalf("Unable to parse date: %v", err)
-	// 			}
-	// 			t := time.Duration(numHours) * time.Hour
-	// 			allowedTime := eTime.Add(-lenienceMinutes)
-	// 			if allowedTime == sTimeNext || allowedTime.After(sTimeNext) || allowedTime.Add(t).After(sTimeNext) {
-	// 				log.Printf("No time after %v, skipping", event.Summary)
-	// 				continue
-	// 			}
-	// 			getNext = true
-	// 		}
+	foundEvents := findAvailableEvents(days, numHours, lenienceMinutes)
 
-	// 		addresses = append(addresses, event.Location)
-	// 		foundEvents = append(foundEvents, event)
-	// 		fmt.Printf("%v: %v\n", id*len(day.Events)+ie, event.Summary)
-	// 		if getNext {
-	// 			addresses = append(addresses, day.Events[ie+1].Location)
-	// 			foundEvents = append(foundEvents, day.Events[ie+1])
-	// 			ie++
-	// 		}
-	// 	}
-	// }
-
-	// Print
-	// fmt.Println("Found events:")
-	// for i, event := range foundEvents {
-	// 	fmt.Printf("%v: %v\n", i, event.Summary)
-	// }
+	fmt.Println("Found spots:")
+	for i, event := range foundEvents {
+		fmt.Printf("Spot %v:\n", i+1)
+		if event.Before != nil {
+			fmt.Printf("\tBefore: %v\n", event.Before.Summary)
+		}
+		if event.After != nil {
+			fmt.Printf("\tAfter: %v\n", event.After.Summary)
+		}
+		if event.Before == nil && event.After == nil {
+			fmt.Println("\tAll day spot")
+		}
+	}
 
 	return
 	// origins := []string{eventLocation, startLocation}
@@ -264,56 +198,180 @@ func main() {
 
 }
 
-func groupEventsByDay(allEvents []*calendar.Event, err error) map[time.Time]Day {
-	days := map[time.Time]Day{}
-	for _, event := range allEvents {
-		if event.Start == nil {
-			log.Println("Event has no start time, skipping")
-			continue
+var (
+	morningCuttoff = 9 * time.Hour
+	eveningCuttoff = 17 * time.Hour
+)
+
+func findAvailableEvents(c Calendar, numHours int, lenienceMinutes time.Duration) []AvailableSpot {
+	var availableSpots []AvailableSpot
+	duration := time.Duration(numHours) * time.Hour
+
+	for date, schedule := range c {
+		allowedMorningTime := date.Time().Add(morningCuttoff).Add(duration).Add(-lenienceMinutes)
+		allowedEveningTime := date.Time().Add(eveningCuttoff).Add(-duration).Add(lenienceMinutes)
+		events := schedule.Events
+		for i := 0; i < len(events); i++ {
+			event := events[i]
+			if event.Location == "" || event.Start == nil || event.End == nil {
+				continue
+			}
+			sTime, err := time.Parse(time.RFC3339, event.Start.DateTime)
+			if err != nil {
+				log.Fatalf("Unable to parse date: %v", err)
+			}
+			if sTime.Before(allowedMorningTime) || sTime.After(allowedEveningTime) {
+				continue
+			}
+			eTime, err := time.Parse(time.RFC3339, event.End.DateTime)
+			if err != nil {
+				log.Fatalf("Unable to parse date: %v", err)
+			}
+			if eTime.After(allowedEveningTime) {
+				continue
+			}
+			var before, after *calendar.Event
+			if len(events) == 1 {
+				if sTime.Before(allowedMorningTime) {
+					before = event
+					after = nil
+				} else if eTime.After(allowedEveningTime) {
+					before = nil
+					after = event
+				} else {
+					// Can be before or after
+					availableSpots = append(availableSpots, AvailableSpot{
+						Before: nil, After: event,
+					})
+					before = event
+					after = nil
+				}
+			} else if i == len(events)-1 {
+				if eTime.Add(duration).After(allowedEveningTime) {
+					continue
+				}
+				after = event
+				before = nil
+			} else {
+				nextEvent := events[i+1]
+				if nextEvent.Start == nil {
+					log.Fatalf("Next event has no start time")
+				}
+				sTimeNext, err := time.Parse(time.RFC3339, nextEvent.Start.DateTime)
+				if err != nil {
+					log.Fatalf("Unable to parse date: %v", err)
+				}
+				if eTime.Add(-lenienceMinutes).Add(duration).After(sTimeNext) {
+					continue
+				}
+				before = event
+				after = nextEvent
+			}
+			availableSpots = append(availableSpots, AvailableSpot{
+				Before: before, After: after,
+			})
+
 		}
-		day, err := time.Parse(time.RFC3339, event.Start.DateTime)
-		if err != nil {
-			log.Fatalf("Unable to parse date: %v", err)
-		}
-		day = day.Truncate(time.Hour * 24)
-		println(day.Format("Monday, January 2, 2006"), ":", event.Summary)
-		if dday, ok := days[day]; ok {
-			days[day] = dday.InsertFunc(event, CompareEvents)
-		} else {
-			days[day] = Day{Day: day}
-		}
+
 	}
-	return days
+
+	return availableSpots
 }
 
-func CompareEvents(e1, e2 *calendar.Event) int {
-	if e1 == nil && e2 == nil {
-		return 0
-	}
-	if e1 == nil {
-		return -1
-	}
-	if e2 == nil {
-		return 1
-	}
-	if e1.Start == nil && e2.Start == nil {
-		return 0
-	}
-	if e1.Start == nil {
-		return -1
-	}
-	if e2.Start == nil {
-		return 1
-	}
-	return cmp.Compare(e1.Start.DateTime, e2.Start.DateTime)
+// func findAvailableEvents(days Calendar, numHours int, lenienceMinutes time.Duration) []AvailableEvent {
+// 	foundEvents := []AvailableEvent{}
+// 	duration := time.Duration(numHours) * time.Hour
+// 	for id, day := range days {
+// 		allowedMorningTime := id.Time().Add(morningCuttoff).Add(duration).Add(-lenienceMinutes)
+// 		allowedEveningTime := id.Time().Add(eveningCuttoff).Add(-duration).Add(lenienceMinutes)
+// 		for ie := 0; ie < len(day.Events); ie++ {
+// 			event := day.Events[ie]
+// 			if event.Location == "" || event.Start == nil || event.End == nil {
+// 				continue
+// 			}
+// 			sTime, err := time.Parse(time.RFC3339, event.Start.DateTime)
+// 			if err != nil {
+// 				log.Fatalf("Unable to parse date: %v", err)
+// 			}
+// 			eTime, err := time.Parse(time.RFC3339, event.End.DateTime)
+// 			if err != nil {
+// 				log.Fatalf("Unable to parse date: %v", err)
+// 			}
+// 			// if sTime.Hour() == 9 || eTime.Hour() == 17 {
+// 			// 	continue
+// 			// }
+
+// 			var before, after *calendar.Event
+// 			switch ie {
+// 			case 0:
+// 				b := sTime.Before(allowedMorningTime)
+// 				c := eTime.After(allowedEveningTime)
+// 				only := len(day.Events) == 1
+// 				switch {
+// 				case b && c && only:
+// 					continue
+// 				case b && only:
+// 					before = event
+// 					after = nil
+// 				case c && only:
+// 					before = event
+// 					after = nil
+// 				case c:
+// 					nextEvent := day.Events[ie+1]
+// 					if nextEvent.Start == nil {
+// 						log.Fatalf("Next event has no start time")
+// 					}
+// 					sTimeNext, err := time.Parse(time.RFC3339, nextEvent.Start.DateTime)
+// 					if err != nil {
+// 						log.Fatalf("Unable to parse date: %v", err)
+// 					}
+// 					if sTime.Add(duration).After(sTimeNext) {
+// 						continue
+// 					}
+// 					before = event
+// 					after = nextEvent
+// 				default:
+// 					// Can be before or after
+// 					foundEvents = append(foundEvents, AvailableEvent{
+// 						nil, event})
+// 					before = event
+// 					after = nil
+// 				}
+// 			case len(day.Events) - 1:
+// 				if eTime.After(allowedEveningTime) {
+// 					continue
+// 				}
+// 				after = nil
+// 				before = event
+// 			default:
+// 				sTimeNext, err := time.Parse(time.RFC3339, day.Events[ie+1].Start.DateTime)
+// 				if err != nil {
+// 					log.Fatalf("Unable to parse date: %v", err)
+// 				}
+// 				t := time.Duration(numHours) * time.Hour
+// 				allowedTime := eTime.Add(-lenienceMinutes)
+// 				if allowedTime == sTimeNext || allowedTime.After(sTimeNext) || allowedTime.Add(t).After(sTimeNext) {
+// 					// log.Printf("No time after %v, skipping", event.Summary)
+// 					continue
+// 				}
+// 				before = event
+// 				after = day.Events[ie+1]
+// 			}
+// 			foundEvents = append(foundEvents, AvailableEvent{
+// 				before, after,
+// 			})
+// 		}
+// 	}
+// 	return foundEvents
+// }
+
+type AvailableSpot struct {
+	Before *calendar.Event
+	After  *calendar.Event
 }
 
-type Day struct {
-	Events SortedSlice[*calendar.Event]
-	Day    time.Time
-}
 type InsertCost struct {
-	*Day
+	*Schedule
 	Cost     time.Duration
 	From, To int
 }
