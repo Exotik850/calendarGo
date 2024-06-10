@@ -133,7 +133,7 @@ func main() {
 	// events, err := calendarService.Events.List(calID).Do()
 	// events, err := calendarService.Events.List(calID).TimeMin(time.Now().Format(time.RFC3339)).TimeMax(time.Now().AddDate(0, 0, 7).Format(time.RFC3339)).Do()
 	// Get the next N events
-	now := time.Now().Round(time.Hour * 24).Add(time.Hour * 24)
+	now := time.Now().Truncate(time.Hour * 24).Add(time.Hour * 24)
 	max := now.AddDate(0, 0, numDays)
 	allEvents := []*calendar.Event{}
 	for _, calID := range calIDs {
@@ -146,11 +146,20 @@ func main() {
 
 	// group events by day
 	days := groupEventsByDay(allEvents, err)
-	sortedDays := make([]string, len(days))
+	sortedDays := make([]time.Time, len(days))
 	for d := range days {
 		sortedDays = append(sortedDays, d)
 	}
-	slices.Sort(sortedDays)
+	slices.SortFunc(sortedDays, func(i, j time.Time) int {
+		switch {
+		case i.Before(j):
+			return -1
+		case i.After(j):
+			return 1
+		default:
+			return 0
+		}
+	})
 	for _, d := range sortedDays {
 		day := days[d]
 		fmt.Println(day.Day)
@@ -255,15 +264,19 @@ func main() {
 
 }
 
-func groupEventsByDay(allEvents []*calendar.Event, err error) map[string]Day {
-	days := map[string]Day{}
+func groupEventsByDay(allEvents []*calendar.Event, err error) map[time.Time]Day {
+	days := map[time.Time]Day{}
 	for _, event := range allEvents {
 		if event.Start == nil {
 			log.Println("Event has no start time, skipping")
 			continue
 		}
-		day := event.Start.DateTime[:10]
-		println(day, ":", event.Summary)
+		day, err := time.Parse(time.RFC3339, event.Start.DateTime)
+		if err != nil {
+			log.Fatalf("Unable to parse date: %v", err)
+		}
+		day = day.Truncate(time.Hour * 24)
+		println(day.Format("Monday, January 2, 2006"), ":", event.Summary)
 		if dday, ok := days[day]; ok {
 			days[day] = dday.InsertFunc(event, CompareEvents)
 		} else {
@@ -295,6 +308,10 @@ func CompareEvents(e1, e2 *calendar.Event) int {
 	return cmp.Compare(e1.Start.DateTime, e2.Start.DateTime)
 }
 
+type Day struct {
+	Events SortedSlice[*calendar.Event]
+	Day    time.Time
+}
 type InsertCost struct {
 	*Day
 	Cost     time.Duration
@@ -304,9 +321,4 @@ type InsertCost struct {
 type LocatedEvent struct {
 	*calendar.Event
 	TravelTime time.Duration
-}
-
-type Day struct {
-	Events SortedSlice[*calendar.Event]
-	Day    string
 }
