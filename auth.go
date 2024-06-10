@@ -13,7 +13,17 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
+	"googlemaps.github.io/maps"
 )
+
+func createMapService() *maps.Client {
+	apiKey := os.Getenv("GOOGLE_MAPS_API_KEY")
+	mapService, err := maps.NewClient(maps.WithAPIKey(apiKey))
+	if err != nil {
+		log.Fatalf("Unable to create map service: %v", err)
+	}
+	return mapService
+}
 
 func createCalendarService(ctx context.Context) *calendar.Service {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
@@ -26,15 +36,16 @@ func createCalendarService(ctx context.Context) *calendar.Service {
 		Endpoint:     google.Endpoint,
 	}
 
-	authCode, err := loadAuthCode()
-	if err != nil {
-		log.Println("No auth code found, getting a new one")
-		authCode = getAuthCode(config, 90*time.Second)
-		err = saveAuthCode(authCode)
-		if err != nil {
-			log.Fatalf("Unable to save authcode: %v", err)
-		}
-	}
+	authCode := getAuthCode(config, 90*time.Second)
+	// authCode, err := loadAuthCode()
+	// if err != nil {
+	// 	log.Println("No auth code found, getting a new one")
+	// 	authCode = getAuthCode(config, 90*time.Second)
+	// 	err = saveAuthCode(authCode)
+	// 	if err != nil {
+	// 		log.Printf("Unable to save authcode: %v", err)
+	// 	}
+	// }
 
 	calendarService := getService(ctx, config, authCode)
 	return calendarService
@@ -43,12 +54,13 @@ func createCalendarService(ctx context.Context) *calendar.Service {
 func getService(ctx context.Context, config *oauth2.Config, authCode string) *calendar.Service {
 	token, err := config.Exchange(ctx, authCode)
 	if err != nil {
-		log.Println("Auth code expired, getting a new one")
-		authCode = getAuthCode(config, 90*time.Second)
-		token, err = config.Exchange(ctx, authCode)
-		if err != nil {
-			log.Fatalf("Unable to retrieve access token: %v", err)
-		}
+		log.Fatalf("Unable to retrieve access token: %v", err)
+		// log.Println("Auth code expired, getting a new one")
+		// authCode = getAuthCode(config, 90*time.Second)
+		// token, err = config.Exchange(ctx, authCode)
+		// if err != nil {
+		// 	log.Fatalf("Unable to retrieve access token: %v", err)
+		// }
 	}
 	client := config.Client(ctx, token)
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
