@@ -2,10 +2,10 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -13,13 +13,20 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/toqueteos/webbrowser"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
-	"google.golang.org/api/option"
 	"googlemaps.github.io/maps"
 )
+
+type SortedSlice[T any] []T
+
+func (s SortedSlice[T]) Len() int      { return len(s) }
+func (s SortedSlice[T]) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+func (d Day) InsertFunc(t *calendar.Event, cmp func(*calendar.Event, *calendar.Event) int) Day {
+	i, _ := slices.BinarySearchFunc(d.Events, t, cmp) // find slot
+	d.Events = slices.Insert(d.Events, i, t)
+	return d
+}
 
 func createMapService() *maps.Client {
 	apiKey := os.Getenv("GOOGLE_MAPS_API_KEY")
@@ -30,31 +37,65 @@ func createMapService() *maps.Client {
 	return mapService
 }
 
+var reader = bufio.NewReader(os.Stdin)
+
+func readInput(prompt string) (string, error) {
+	fmt.Println(prompt)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(input), nil
+}
+
+func readNumber(prompt string) (int, error) {
+	input, err := readInput(prompt)
+	if err != nil {
+		return 0, err
+	}
+	num, err := strconv.Atoi(input)
+	if err != nil {
+		return 0, err
+	}
+	return num, nil
+}
+
 func main() {
 
-	err := godotenv.Load(".env")
+	err := godotenv.Load("./.env")
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
 
+	// config, err := LoadConfig("config.json")
+	// if err != nil {
+	// 	log.Fatalf("Unable to load config: %v", err)
+	// }
+
 	ctx := context.Background()
 	calendarService := createCalendarService(ctx)
-	mapService := createMapService()
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("Enter the location you want to search for:")
-	location, err := reader.ReadString('\n')
+	// mapService := createMapService()
+	// eventLocation, err := readInput("Enter the location you want to search for:")
+	// if err != nil {
+	// 	log.Fatalf("Unable to read input: %v", err)
+	// }
+	// startLocation, err := readInput("Enter the location you want to start from:")
+	// if err != nil {
+	// 	log.Fatalf("Unable to read input: %v", err)
+	// }
+	numDays, err := readNumber("Enter the number of days you want to search through:")
 	if err != nil {
 		log.Fatalf("Unable to read input: %v", err)
 	}
-	fmt.Println("Enter the number of days you want to search through:")
-	numD, err := reader.ReadString('\n')
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-	numDays, err := strconv.Atoi(strings.TrimSpace(numD))
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
+	// numHours, err := readNumber("Enter the number of hours for the event:")
+	// if err != nil {
+	// 	log.Fatalf("Unable to read input: %v", err)
+	// }
+	// lenience, err := readNumber("Enter the number of minutes of lenience:\n\t(If there is an overlap of this many minutes, the event will still be considered to be able to be attended):")
+	// if err != nil {
+	// 	log.Fatalf("Unable to read input: %v", err)
+	// }
+	// lenienceMinutes := time.Duration(lenience) * time.Minute
 
 	// Print the available calendars
 	cals, err := calendarService.CalendarList.List().Do()
@@ -65,20 +106,28 @@ func main() {
 	ids := make([]string, len(cals.Items))
 	for i, cal := range cals.Items {
 		ids[i] = cal.Id
-		fmt.Printf("%v (%v)\n", cal.Summary, cal.Id)
+		fmt.Printf("%v (%v)\n", cal.Summary, i)
 	}
 
 	// Have the user select a calendar
 	// Print the events in the selected calendar for the current week
-	fmt.Println("Enter the ID of the calendar you want to search:")
-	calID, err := reader.ReadString('\n')
+	calIDStr, err := readInput("Enter the IDs of the calendars you want to search:\n\t(Comma separated, e.g. 1,2,3):")
 	if err != nil {
 		log.Fatalf("Unable to read input: %v", err)
 	}
-	calID = strings.TrimSpace(calID)
 
-	if !slices.Contains(ids, calID) {
-		log.Fatalf("Invalid calendar ID")
+	calIDStr = strings.ReplaceAll(calIDStr, " ", "")
+	calIDStrs := strings.Split(calIDStr, ",")
+	calIDs := make([]int, len(calIDStrs))
+	for i, calIDStr := range calIDStrs {
+		calID, err := strconv.Atoi(calIDStr)
+		if err != nil {
+			log.Fatalf("Invalid calendar ID: %v", err)
+		}
+		if calID < 0 || calID >= len(ids) {
+			log.Fatalf("Invalid calendar ID")
+		}
+		calIDs[i] = calID
 	}
 
 	// events, err := calendarService.Events.List(calID).Do()
@@ -86,80 +135,170 @@ func main() {
 	// Get the next N events
 	now := time.Now().Round(time.Hour * 24).Add(time.Hour * 24)
 	max := now.AddDate(0, 0, numDays)
-
-	events, err := calendarService.Events.List(calID).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).OrderBy("startTime").SingleEvents(true).Do()
-	if err != nil {
-		log.Fatalf("Unable to retrieve events: %v", err)
-	}
-
-	// Get the distance to the location
-	addresses := make([]string, len(events.Items))
-	foundEvents := []*calendar.Event{}
-	for i, event := range events.Items {
-		if event.Location == "" {
-			log.Println("Event has no location, skipping")
-			continue
+	allEvents := []*calendar.Event{}
+	for _, calID := range calIDs {
+		events, err := calendarService.Events.List(ids[calID]).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).OrderBy("startTime").SingleEvents(true).Do()
+		if err != nil {
+			log.Fatalf("Unable to retrieve events: %v", err)
 		}
-		addresses[i] = event.Location
-		foundEvents = append(foundEvents, event)
-	}
-	distances, err := mapService.DistanceMatrix(ctx, &maps.DistanceMatrixRequest{
-		Origins:      []string{location},
-		Destinations: addresses,
-		Mode:         maps.TravelModeDriving,
-		Units:        maps.UnitsImperial,
-	})
-	if err != nil {
-		log.Fatalf("Unable to retrieve distances: %v", err)
-	}
-	locatedEvents := make([]LocatedEvent, len(events.Items))
-	distanceRow := distances.Rows[0]
-
-	for i, event := range foundEvents {
-		ttime := distanceRow.Elements[i].Duration
-		locatedEvents[i] = LocatedEvent{Event: event, TravelTime: ttime}
+		allEvents = append(allEvents, events.Items...)
 	}
 
 	// group events by day
-	days := []Day{}
-	var currentDay Day
-	for _, event := range locatedEvents {
+	days := groupEventsByDay(allEvents, err)
+	sortedDays := make([]string, len(days))
+	for d := range days {
+		sortedDays = append(sortedDays, d)
+	}
+	slices.Sort(sortedDays)
+	for _, d := range sortedDays {
+		day := days[d]
+		fmt.Println(day.Day)
+		for _, event := range day.Events {
+			fmt.Printf("\t%v\n", event.Summary)
+		}
+	}
+	return // Remove this line to continue
+
+	// addresses := make([]string, len(allEvents))
+	// foundEvents := []*calendar.Event{}
+	// for id, day := range days {
+	// 	for ie := 0; ie < len(day.Events); ie++ {
+	// 		event := day.Events[ie]
+	// 		if event.Location == "" {
+	// 			log.Printf("Event %v has no location, skipping", event.Summary)
+	// 			continue
+	// 		}
+	// 		if event.Start == nil || event.End == nil {
+	// 			log.Printf("Event %v has no start or no end time, skipping", event.Summary)
+	// 			continue
+	// 		}
+	// 		sTime, err := time.Parse(time.RFC3339, event.Start.DateTime)
+	// 		if err != nil {
+	// 			log.Fatalf("Unable to parse date: %v", err)
+	// 		}
+	// 		eTime, err := time.Parse(time.RFC3339, event.End.DateTime)
+	// 		if err != nil {
+	// 			log.Fatalf("Unable to parse date: %v", err)
+	// 		}
+	// 		// If it starts at 9am or ends at 5pm, we can't make it
+	// 		if sTime.Hour() == 9 || eTime.Hour() == 17 {
+	// 			log.Printf("Event %v starts at 9am or ends at 5pm, skipping", event.Summary)
+	// 			continue
+	// 		}
+	// 		getNext := false
+	// 		if ie != len(day.Events)-1 {
+	// 			sTimeNext, err := time.Parse(time.RFC3339, day.Events[ie+1].Start.DateTime)
+	// 			if err != nil {
+	// 				log.Fatalf("Unable to parse date: %v", err)
+	// 			}
+	// 			t := time.Duration(numHours) * time.Hour
+	// 			allowedTime := eTime.Add(-lenienceMinutes)
+	// 			if allowedTime == sTimeNext || allowedTime.After(sTimeNext) || allowedTime.Add(t).After(sTimeNext) {
+	// 				log.Printf("No time after %v, skipping", event.Summary)
+	// 				continue
+	// 			}
+	// 			getNext = true
+	// 		}
+
+	// 		addresses = append(addresses, event.Location)
+	// 		foundEvents = append(foundEvents, event)
+	// 		fmt.Printf("%v: %v\n", id*len(day.Events)+ie, event.Summary)
+	// 		if getNext {
+	// 			addresses = append(addresses, day.Events[ie+1].Location)
+	// 			foundEvents = append(foundEvents, day.Events[ie+1])
+	// 			ie++
+	// 		}
+	// 	}
+	// }
+
+	// Print
+	// fmt.Println("Found events:")
+	// for i, event := range foundEvents {
+	// 	fmt.Printf("%v: %v\n", i, event.Summary)
+	// }
+
+	return
+	// origins := []string{eventLocation, startLocation}
+	// distances, err := mapService.DistanceMatrix(ctx, &maps.DistanceMatrixRequest{
+	// 	Origins:      origins,
+	// 	Destinations: append(origins, addresses...),
+	// 	Mode:         maps.TravelModeDriving,
+	// 	Units:        maps.UnitsImperial,
+	// })
+	// if err != nil {
+	// 	log.Fatalf("Unable to retrieve distances: %v", err)
+	// }
+	// locatedEvents := make([]LocatedEvent, len(foundEvents))
+	// distanceRow := distances.Rows[0]
+
+	// for i, event := range foundEvents {
+	// 	ttime := distanceRow.Elements[i].Duration
+	// 	locatedEvents[i] = LocatedEvent{Event: event, TravelTime: ttime}
+	// }
+
+	// for _, day := range days {
+	// 	fmt.Println(day.Day.Format("Monday, January 2, 2006"))
+	// 	ilen := len(day.Events) + 1
+	// 	insertCost := make([]InsertCost, ilen)
+	// 	for i := 0; i < len(day.Events); i++ {
+	// 		next := (i + 1) % len(day.Events)
+	// 		cost := day.Events[i].TravelTime + day.Events[next].TravelTime
+	// 		insertCost[i] = InsertCost{Cost: cost, From: i, To: next, Day: &day}
+	// 	}
+	// 	min := slices.MinFunc(insertCost, func(i, j InsertCost) int {
+	// 		return cmp.Compare(i.Cost, j.Cost)
+	// 	})
+	// 	// "The shortest path is to go from %v to %v, then to %v"
+	// 	fmt.Printf("The shortest path is to go from %v to %v, then to %v\n", day.Events[min.From].Summary, eventLocation, day.Events[min.To].Summary)
+	// }
+
+}
+
+func groupEventsByDay(allEvents []*calendar.Event, err error) map[string]Day {
+	days := map[string]Day{}
+	for _, event := range allEvents {
 		if event.Start == nil {
 			log.Println("Event has no start time, skipping")
 			continue
 		}
-
-		if currentDay.Day.IsZero() {
-			currentDay.Day, err = time.Parse(time.RFC3339, event.Start.DateTime)
-			if err != nil {
-				log.Fatalf("Unable to parse date: %v", err)
-			}
-			currentDay.Events = append(currentDay.Events, event)
-			continue
-		}
-		day, err := time.Parse(time.RFC3339, event.Start.DateTime)
-		if err != nil {
-			log.Fatalf("Unable to parse date: %v", err)
-		}
-		if day.Day() == currentDay.Day.Day() {
-			currentDay.Events = append(currentDay.Events, event)
+		day := event.Start.DateTime[:10]
+		println(day, ":", event.Summary)
+		if dday, ok := days[day]; ok {
+			days[day] = dday.InsertFunc(event, CompareEvents)
 		} else {
-			days = append(days, currentDay)
-			currentDay = Day{Day: day, Events: []LocatedEvent{event}}
+			days[day] = Day{Day: day}
 		}
 	}
-	days = append(days, currentDay)
-	for _, day := range days {
-		fmt.Println(day.Day.Format("Monday, January 2, 2006"))
-		for _, event := range day.Events {
-			time, err := time.Parse(time.RFC3339, event.Start.DateTime)
-			if err != nil {
-				log.Fatalf("Unable to parse date: %v", err)
-			}
-			fmt.Printf("\t%v: %v (%v)\n", time.Local(), event.Summary, event.TravelTime)
-		}
-	}
+	return days
+}
 
+func CompareEvents(e1, e2 *calendar.Event) int {
+	if e1 == nil && e2 == nil {
+		return 0
+	}
+	if e1 == nil {
+		return -1
+	}
+	if e2 == nil {
+		return 1
+	}
+	if e1.Start == nil && e2.Start == nil {
+		return 0
+	}
+	if e1.Start == nil {
+		return -1
+	}
+	if e2.Start == nil {
+		return 1
+	}
+	return cmp.Compare(e1.Start.DateTime, e2.Start.DateTime)
+}
+
+type InsertCost struct {
+	*Day
+	Cost     time.Duration
+	From, To int
 }
 
 type LocatedEvent struct {
@@ -168,110 +307,6 @@ type LocatedEvent struct {
 }
 
 type Day struct {
-	Events []LocatedEvent
-	Day    time.Time
-}
-
-func createCalendarService(ctx context.Context) *calendar.Service {
-	clientID := os.Getenv("GOOGLE_CLIENT_ID")
-	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-	config := &oauth2.Config{
-		RedirectURL:  "http://localhost:8080",
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		Scopes:       []string{calendar.CalendarScope},
-		Endpoint:     google.Endpoint,
-	}
-
-	authCode, err := loadAuthCode()
-	if err != nil {
-		log.Println("No auth code found, getting a new one")
-		authCode = getAuthCode(config, 90*time.Second)
-		err = saveAuthCode(authCode)
-		if err != nil {
-			log.Fatalf("Unable to save authcode: %v", err)
-		}
-	}
-
-	calendarService := getService(ctx, config, authCode)
-	return calendarService
-}
-
-func getService(ctx context.Context, config *oauth2.Config, authCode string) *calendar.Service {
-	token, err := config.Exchange(ctx, authCode)
-	if err != nil {
-		log.Println("Auth code expired, getting a new one")
-		authCode = getAuthCode(config, 90*time.Second)
-		token, err = config.Exchange(ctx, authCode)
-		if err != nil {
-			log.Fatalf("Unable to retrieve access token: %v", err)
-		}
-	}
-	client := config.Client(ctx, token)
-	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
-	if err != nil {
-		log.Fatalf("Unable to create Calendar client: %v", err)
-	}
-	return srv
-}
-
-func saveAuthCode(authCode string) error {
-	return os.WriteFile("authcode.txt", []byte(authCode), 0600)
-}
-
-func loadAuthCode() (string, error) {
-	authCode, err := os.ReadFile("authcode.txt")
-	if err != nil {
-		return "", err
-	}
-	return string(authCode), nil
-}
-
-func getAuthCode(config *oauth2.Config, timeout time.Duration) string {
-	ch := make(chan string)
-	randState := fmt.Sprintf("st%d", time.Now().UnixNano())
-	srv := runServer(randState, ch)
-	defer srv.Shutdown(context.Background())
-	authURL := config.AuthCodeURL(randState)
-	err := webbrowser.Open(authURL)
-	if err != nil {
-		println("Go to this url:", authURL)
-	}
-
-	select {
-	case <-time.After(timeout):
-		log.Fatal("Timeout")
-		return ""
-	case authCode := <-ch:
-		return authCode
-	}
-}
-
-func runServer(randState string, ch chan string) *http.Server {
-	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/favicon.ico" {
-			http.Error(rw, "", http.StatusNotFound)
-			return
-		}
-		query := req.URL.Query()
-		if query.Get("state") != randState {
-			http.Error(rw, "", http.StatusBadRequest)
-			return
-		}
-		code := query.Get("code")
-		if code == "" {
-			http.Error(rw, "", http.StatusBadRequest)
-			return
-		}
-		rw.Write([]byte("Authorized! You can now close this window."))
-		ch <- code
-	})
-	srv := &http.Server{Addr: "localhost:8080", Handler: handler}
-
-	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("ListenAndServe(): %v", err)
-		}
-	}()
-	return srv
+	Events SortedSlice[*calendar.Event]
+	Day    string
 }
