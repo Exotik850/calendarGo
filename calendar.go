@@ -20,7 +20,7 @@ func groupEventsByDay(allEvents []*calendar.Event) Calendar {
 		if event == nil || event.Start == nil {
 			continue
 		}
-		day, err := time.Parse(time.RFC3339, event.Start.DateTime)
+		day, err := time.ParseInLocation(time.RFC3339, event.Start.DateTime, time.Local)
 		if err != nil {
 			log.Fatalf("Unable to parse date: %v", err)
 		}
@@ -42,28 +42,6 @@ func groupEventsByDay(allEvents []*calendar.Event) Calendar {
 	}
 
 	return days
-}
-
-func CompareEvents(e1, e2 *calendar.Event) int {
-	if e1 == nil && e2 == nil {
-		return 0
-	}
-	if e1 == nil {
-		return -1
-	}
-	if e2 == nil {
-		return 1
-	}
-	if e1.Start == nil && e2.Start == nil {
-		return 0
-	}
-	if e1.Start == nil {
-		return -1
-	}
-	if e2.Start == nil {
-		return 1
-	}
-	return cmp.Compare(e1.Start.DateTime, e2.Start.DateTime)
 }
 
 func findInsertIndex(events []*calendar.Event, e *calendar.Event) int {
@@ -101,29 +79,15 @@ func (d Date) IsZero() bool {
 }
 
 func (d Date) Compare(other Date) int {
-	if d.Year != other.Year {
-		if d.Year < other.Year {
-			return -1
-		}
-		return 1
-	}
-	if d.Month != other.Month {
-		if d.Month < other.Month {
-			return -1
-		}
-		return 1
-	}
-	if d.Day != other.Day {
-		if d.Day < other.Day {
-			return -1
-		}
-		return 1
-	}
-	return 0
+	return d.Time().Compare(other.Time())
 }
 
 func (d Date) Time() time.Time {
 	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.Local)
+}
+
+func (d Date) AddDate(years, months, days int) Date {
+	return TimeToDate(d.Time().AddDate(years, months, days))
 }
 
 func TimeToDate(t time.Time) Date {
@@ -140,17 +104,104 @@ type Schedule struct {
 
 type Calendar map[Date]Schedule
 
-// Returns a beginning and ending date for the calendar
-func (c Calendar) Range() (Date, Date) {
-	min := Date{Year: 9999}
-	max := Date{Year: 0}
-	for date := range c {
-		if date.Year < min.Year && date.Month < min.Month && date.Day < min.Day {
-			min = date
+const (
+	morningCuttoff = 9
+	eveningCuttoff = 17
+)
+
+type TimeSlot struct {
+	Date
+	ComesAfter  *calendar.Event
+	ComesBefore *calendar.Event
+	Start       time.Time
+	End         time.Time
+}
+
+func (c Calendar) FindAvailableTimeSlots(start, end Date, duration time.Duration) []TimeSlot {
+	var slots []TimeSlot
+	for d := start; d.Compare(end) <= 0; d = d.AddDate(0, 0, 1) {
+		wd := d.Time().Weekday()
+		if wd == time.Saturday || wd == time.Sunday {
+			// Skip weekends
+			continue
 		}
-		if date.Year > max.Year && date.Month > max.Month && date.Day > max.Day {
-			max = date
+
+		sch, ok := c[d]
+		if !ok {
+			// If the day is not in the calendar, it's fully available
+			slots = append(slots, TimeSlot{
+				Date:  d,
+				Start: time.Date(d.Year, d.Month, d.Day, morningCuttoff, 0, 0, 0, time.Local),
+				End:   time.Date(d.Year, d.Month, d.Day, eveningCuttoff, 0, 0, 0, time.Local),
+			})
+			continue
+		}
+		// If there are events on the day, sort them and find any gaps
+		// sort.Sort(sch.Events)
+
+		dayEnd := time.Date(d.Year, d.Month, d.Day, eveningCuttoff, 0, 0, 0, time.Local)
+		lastEnd := time.Date(d.Year, d.Month, d.Day, morningCuttoff, 0, 0, 0, time.Local)
+		for i, e := range sch.Events {
+			if e.Start == nil || e.End == nil {
+				continue
+			}
+			eventStart, _ := time.ParseInLocation(time.RFC3339, e.Start.DateTime, time.Local)
+			eventEnd, _ := time.ParseInLocation(time.RFC3339, e.End.DateTime, time.Local)
+			if eventStart.Sub(lastEnd) >= duration {
+				// There is a gap between the previous event's end and this one's start, which is long enough
+				var after *calendar.Event
+				if i > 0 {
+					after = sch.Events[i-1]
+				}
+
+				slots = append(slots, TimeSlot{
+					Date:        d,
+					Start:       lastEnd,
+					End:         eventStart,
+					ComesAfter:  after,
+					ComesBefore: e,
+				})
+			}
+			if eventEnd.After(lastEnd) {
+				// Update the last end time
+				lastEnd = eventEnd
+			}
+		}
+		// Check for any gap after the last event of the day
+		if dayEnd.Sub(lastEnd) >= duration {
+			slots = append(slots, TimeSlot{
+				Start:      lastEnd,
+				End:        dayEnd,
+				Date:       d,
+				ComesAfter: sch.Events[len(sch.Events)-1],
+			})
 		}
 	}
-	return min, max
+	return slots
 }
+
+// func (c Calendar) FindAvailableTimeSlots(start, end Date, duration time.Duration) []TimeSlot {
+// 	var slots []TimeSlot
+// 	for d := start; d.Compare(end) <= 0; d = d.AddDate(0, 0, 1) {
+// 		sch, ok := c[d]
+// 		if !ok {
+// 			slots = append(slots, TimeSlot {
+// 				Start: d.Time().Add(time.Hour * morningCuttoff),
+// 				End:   d.Time().Add(time.Hour * eveningCuttoff),
+// 			})
+// 			continue
+// 		}
+// 		for i, e := range sch.Events{
+// 			if e.Start == nil || e.End == nil {
+// 				continue
+// 			}
+
+// 			sTime, _ := time.Parse(time.RFC3339, e.Start.DateTime)
+// 			eTime, _ := time.Parse(time.RFC3339, e.End.DateTime)
+
+// 			// Only a few possibilities:
+
+// 		}
+// 	}
+// 	return slots
+// }
