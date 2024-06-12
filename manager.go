@@ -134,7 +134,7 @@ func main() {
 		}
 	}
 	slices.SortFunc(sortedDays, func(i, j Date) int {
-		return i.Compare(j)
+		return i.Time().Compare(j.Time())
 	})
 	for _, d := range sortedDays {
 		day, found := days[d]
@@ -214,21 +214,24 @@ func main() {
 
 	}
 	locatedEvents := make([]LocatedTimeSlot, len(foundEvents))
-	// distanceRow := distances.Rows[0]
 
 	for i, event := range foundEvents {
 		ttime := 0
 
 		if event.ComesAfter != nil {
+			// If there is an event before, add the distance from that event to the current event
 			ttime += eventLocationMap[event.ComesAfter.Location]
 		} else {
-			ttime += eventLocationMap[startLocation]
+			// If there is no event before, add the distance from the start location to the current event
+			ttime += startLocationMap[eventLocation]
 		}
 
 		if event.ComesBefore != nil {
-			ttime += startLocationMap[event.ComesBefore.Location]
+			// If there is an event after, add the distance from the current event to that event
+			ttime += eventLocationMap[event.ComesBefore.Location]
 		} else {
-			ttime += startLocationMap[eventLocation]
+			// If there is no event after, add the distance from the current event to the start location
+			ttime += eventLocationMap[startLocation]
 		}
 
 		locatedEvents[i] = LocatedTimeSlot{TimeSlot: event, Distance: ttime}
