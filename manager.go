@@ -13,6 +13,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"google.golang.org/api/calendar/v3"
+	"googlemaps.github.io/maps"
 )
 
 var reader = bufio.NewReader(os.Stdin)
@@ -52,15 +53,15 @@ func main() {
 
 	ctx := context.Background()
 	calendarService := createCalendarService(ctx)
-	// mapService := createMapService()
-	// eventLocation, err := readInput("Enter the location you want to search for:")
-	// if err != nil {
-	// 	log.Fatalf("Unable to read input: %v", err)
-	// }
-	// startLocation, err := readInput("Enter the location you want to start from:")
-	// if err != nil {
-	// 	log.Fatalf("Unable to read input: %v", err)
-	// }
+	mapService := createMapService()
+	eventLocation, err := readInput("Enter the location you want to search for:")
+	if err != nil {
+		log.Fatalf("Unable to read input: %v", err)
+	}
+	startLocation, err := readInput("Enter the location you want to start from:")
+	if err != nil {
+		log.Fatalf("Unable to read input: %v", err)
+	}
 	numDays, err := readNumber("Enter the number of days you want to search through:")
 	if err != nil {
 		log.Fatalf("Unable to read input: %v", err)
@@ -69,11 +70,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to read input: %v", err)
 	}
-	lenience, err := readNumber("Enter the number of minutes of lenience:\n\t(If there is an overlap of this many minutes, the event will still be considered to be able to be attended):")
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-	lenienceMinutes := time.Duration(lenience) * time.Minute
+	duration := time.Hour * time.Duration(numHours)
+	// lenience, err := readNumber("Enter the number of minutes of lenience:\n\t(If there is an overlap of this many minutes, the event will still be considered to be able to be attended):")
+	// if err != nil {
+	// 	log.Fatalf("Unable to read input: %v", err)
+	// }
+	// lenienceMinutes := time.Duration(lenience) * time.Minute
 
 	// Print the available calendars
 	cals, err := calendarService.CalendarList.List().Do()
@@ -145,40 +147,110 @@ func main() {
 		}
 	}
 
-	foundEvents := findAvailableEvents(days, numHours, lenienceMinutes)
+	// Don't look at today, we don't have events for it
+	startDate := Date{
+		Year: now.Year(), Month: now.Month(), Day: now.Day() + 1,
+	}
+	endDate := startDate
+	endDate.Day += numDays - 1
+
+	foundEvents := days.FindAvailableTimeSlots(startDate, endDate, duration)
 
 	fmt.Println("Found spots:")
-	for i, event := range foundEvents {
-		fmt.Printf("Spot %v:\n", i+1)
-		if event.Before != nil {
-			fmt.Printf("\tBefore: %v\n", event.Before.Summary)
+	count := 1
+	locationSet := map[string]struct{}{}
+	for _, event := range foundEvents {
+		if event.Date.Day == int(time.Sunday) {
+			continue
 		}
-		if event.After != nil {
-			fmt.Printf("\tAfter: %v\n", event.After.Summary)
+		fmt.Printf("Spot %v:\n", count)
+		fmt.Printf("\tDate: %v\n", event.Date.Time().Format("Monday, January 2, 2006"))
+		fmt.Printf("\tStart: %v\n", event.Start.Format(time.Kitchen))
+		fmt.Printf("\tEnd: %v\n", event.End.Format(time.Kitchen))
+		if event.ComesAfter != nil && event.ComesAfter.Location != "" {
+			fmt.Printf("\tComes after %v\n", event.ComesAfter.Summary)
+			locationSet[event.ComesAfter.Location] = struct{}{}
 		}
-		if event.Before == nil && event.After == nil {
-			fmt.Println("\tAll day spot")
+		if event.ComesBefore != nil && event.ComesBefore.Location != "" {
+			fmt.Printf("\tComes before %v\n", event.ComesBefore.Summary)
+			locationSet[event.ComesAfter.Location] = struct{}{}
 		}
+		count++
 	}
 
-	return
-	// origins := []string{eventLocation, startLocation}
-	// distances, err := mapService.DistanceMatrix(ctx, &maps.DistanceMatrixRequest{
-	// 	Origins:      origins,
-	// 	Destinations: append(origins, addresses...),
-	// 	Mode:         maps.TravelModeDriving,
-	// 	Units:        maps.UnitsImperial,
-	// })
-	// if err != nil {
-	// 	log.Fatalf("Unable to retrieve distances: %v", err)
-	// }
-	// locatedEvents := make([]LocatedEvent, len(foundEvents))
+	addresses := []string{}
+	for loc := range locationSet {
+		addresses = append(addresses, loc)
+	}
+
+	origins := []string{eventLocation, startLocation}
+	addresses = append(origins, addresses...)
+	distances, err := mapService.DistanceMatrix(ctx, &maps.DistanceMatrixRequest{
+		Origins:      origins,
+		Destinations: addresses,
+		Mode:         maps.TravelModeDriving,
+		Units:        maps.UnitsImperial,
+	})
+	if err != nil {
+		log.Fatalf("Unable to retrieve distances: %v", err)
+	}
+
+	eventLocationMap := map[string]int{}
+	startLocationMap := map[string]int{}
+
+	for io, or := range origins {
+		for id, dist := range distances.Rows[io].Elements {
+			if dist.Status != "OK" {
+				fmt.Printf("Unable to retrieve distance for %v and %v", or, addresses[id])
+				continue
+			}
+			if io == 0 {
+				eventLocationMap[addresses[id]] = dist.Distance.Meters
+			} else {
+				startLocationMap[addresses[id]] = dist.Distance.Meters
+			}
+			fmt.Println(or + " -> " + addresses[id] + ": " + dist.Distance.HumanReadable)
+		}
+
+	}
+	locatedEvents := make([]LocatedTimeSlot, len(foundEvents))
 	// distanceRow := distances.Rows[0]
 
-	// for i, event := range foundEvents {
-	// 	ttime := distanceRow.Elements[i].Duration
-	// 	locatedEvents[i] = LocatedEvent{Event: event, TravelTime: ttime}
-	// }
+	for i, event := range foundEvents {
+		ttime := 0
+
+		if event.ComesAfter != nil {
+			ttime += eventLocationMap[event.ComesAfter.Location]
+		} else {
+			ttime += eventLocationMap[startLocation]
+		}
+
+		if event.ComesBefore != nil {
+			ttime += startLocationMap[event.ComesBefore.Location]
+		} else {
+			ttime += startLocationMap[eventLocation]
+		}
+
+		locatedEvents[i] = LocatedTimeSlot{TimeSlot: event, Distance: ttime}
+	}
+
+	slices.SortFunc(locatedEvents, func(i, j LocatedTimeSlot) int {
+		return i.Distance - j.Distance
+	})
+
+	for i, event := range locatedEvents {
+		fmt.Printf("Spot %v:\n", i+1)
+		fmt.Printf("\tDate: %v\n", event.Date.Time().Format("Monday, January 2, 2006"))
+		fmt.Printf("\tStart: %v\n", event.Start.Format(time.Kitchen))
+		fmt.Printf("\tEnd: %v\n", event.End.Format(time.Kitchen))
+		if event.ComesAfter != nil && event.ComesAfter.Location != "" {
+			fmt.Printf("\tComes after %v\n", event.ComesAfter.Summary)
+		}
+		if event.ComesBefore != nil && event.ComesBefore.Location != "" {
+			fmt.Printf("\tComes before %v\n", event.ComesBefore.Summary)
+		}
+		fmt.Printf("\tAdded Distance: %.2fmi\n", float64(event.Distance)/1609.0)
+	}
 
 	// for _, day := range days {
 	// 	fmt.Println(day.Day.Format("Monday, January 2, 2006"))
@@ -198,84 +270,9 @@ func main() {
 
 }
 
-var (
-	morningCuttoff = 9 * time.Hour
-	eveningCuttoff = 17 * time.Hour
-)
-
-func findAvailableEvents(c Calendar, numHours int, lenienceMinutes time.Duration) []AvailableSpot {
-	var availableSpots []AvailableSpot
-	duration := time.Duration(numHours) * time.Hour
-
-	for date, schedule := range c {
-		allowedMorningTime := date.Time().Add(morningCuttoff).Add(duration).Add(-lenienceMinutes)
-		allowedEveningTime := date.Time().Add(eveningCuttoff).Add(-duration).Add(lenienceMinutes)
-		events := schedule.Events
-		for i := 0; i < len(events); i++ {
-			event := events[i]
-			if event.Location == "" || event.Start == nil || event.End == nil {
-				continue
-			}
-			sTime, err := time.Parse(time.RFC3339, event.Start.DateTime)
-			if err != nil {
-				log.Fatalf("Unable to parse date: %v", err)
-			}
-			if sTime.Before(allowedMorningTime) || sTime.After(allowedEveningTime) {
-				continue
-			}
-			eTime, err := time.Parse(time.RFC3339, event.End.DateTime)
-			if err != nil {
-				log.Fatalf("Unable to parse date: %v", err)
-			}
-			if eTime.After(allowedEveningTime) {
-				continue
-			}
-			var before, after *calendar.Event
-			if len(events) == 1 {
-				if sTime.Before(allowedMorningTime) {
-					before = event
-					after = nil
-				} else if eTime.After(allowedEveningTime) {
-					before = nil
-					after = event
-				} else {
-					// Can be before or after
-					availableSpots = append(availableSpots, AvailableSpot{
-						Before: nil, After: event,
-					})
-					before = event
-					after = nil
-				}
-			} else if i == len(events)-1 {
-				if eTime.Add(duration).After(allowedEveningTime) {
-					continue
-				}
-				after = event
-				before = nil
-			} else {
-				nextEvent := events[i+1]
-				if nextEvent.Start == nil {
-					log.Fatalf("Next event has no start time")
-				}
-				sTimeNext, err := time.Parse(time.RFC3339, nextEvent.Start.DateTime)
-				if err != nil {
-					log.Fatalf("Unable to parse date: %v", err)
-				}
-				if eTime.Add(-lenienceMinutes).Add(duration).After(sTimeNext) {
-					continue
-				}
-				before = event
-				after = nextEvent
-			}
-			availableSpots = append(availableSpots, AvailableSpot{
-				Before: before, After: after,
-			})
-
-		}
-
-	}
-
-	return availableSpots
+type LocatedTimeSlot struct {
+	TimeSlot
+	Distance int
 }
 
 // func findAvailableEvents(days Calendar, numHours int, lenienceMinutes time.Duration) []AvailableEvent {
@@ -365,18 +362,18 @@ func findAvailableEvents(c Calendar, numHours int, lenienceMinutes time.Duration
 // 	return foundEvents
 // }
 
-type AvailableSpot struct {
-	Before *calendar.Event
-	After  *calendar.Event
+func printHour(hour int) string {
+	if hour < 12 {
+		return fmt.Sprintf("%v AM", hour)
+	} else if hour == 12 {
+		return fmt.Sprintf("%v PM", hour)
+	} else {
+		return fmt.Sprintf("%v PM", hour-12)
+	}
 }
 
 type InsertCost struct {
 	*Schedule
 	Cost     time.Duration
 	From, To int
-}
-
-type LocatedEvent struct {
-	*calendar.Event
-	TravelTime time.Duration
 }
