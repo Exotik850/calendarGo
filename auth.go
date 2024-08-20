@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -71,7 +72,7 @@ func getService(ctx context.Context, config *oauth2.Config, authCode string) *ca
 }
 
 func saveAuthCode(authCode string) error {
-	return os.WriteFile("authcode.txt", []byte(authCode), 0600)
+	return os.WriteFile("authcode.txt", []byte(authCode), fs.ModePerm)
 }
 
 func loadAuthCode() (string, error) {
@@ -96,10 +97,10 @@ func getAuthCode(config *oauth2.Config, timeout time.Duration) string {
 	select {
 	case <-time.After(timeout):
 		log.Fatal("Timeout")
-		return ""
 	case authCode := <-ch:
 		return authCode
 	}
+	return ""
 }
 
 func runServer(randState string, ch chan string) *http.Server {

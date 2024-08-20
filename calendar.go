@@ -1,12 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/api/calendar/v3"
+	"googlemaps.github.io/maps"
 )
 
 type Date struct {
@@ -46,7 +50,7 @@ func (s *Schedule) Insert(e *calendar.Event) {
 	s.Events = slices.Insert(s.Events, index, e)
 }
 
-type Calendar map[Date]*Schedule
+type Calendar map[Date]Schedule
 
 const (
 	morningCutoff = 9
@@ -75,7 +79,7 @@ func groupEventsByDay(allEvents []*calendar.Event) Calendar {
 		if sch, ok := cal[date]; ok {
 			sch.Insert(e)
 		} else {
-			cal[date] = &Schedule{Events: []*calendar.Event{e}}
+			cal[date] = Schedule{Events: []*calendar.Event{e}}
 		}
 	}
 	return cal
@@ -135,4 +139,215 @@ func (c Calendar) FindAvailableTimeSlots(start, end Date, duration time.Duration
 		}
 	}
 	return slots
+}
+
+func findSlots(opts Opts) {
+	ids := getAndPrintCalendars(opts.calendarService)
+
+	calIDs := readCalendarIds(ids)
+
+	allEvents, now := retrieveEvents(opts.numDays, calIDs, opts.calendarService, ids)
+
+	days := groupEventsByDay(allEvents)
+
+	sortedDays := sortDays(days)
+	for _, d := range sortedDays {
+		day, found := days[d]
+		if !found {
+			continue
+		}
+		fmt.Println(d.Time().Format("Monday, January 2, 2006"))
+		for _, event := range day.Events {
+			fmt.Printf("\t%v\n", event.Summary)
+		}
+	}
+
+	startDate := Date{
+		Year: now.Year(), Month: now.Month(), Day: now.Day() + 1,
+	}
+	endDate := startDate.AddDate(0, 0, opts.numDays-1)
+
+	foundEvents := days.FindAvailableTimeSlots(startDate, endDate, opts.duration)
+
+	fmt.Println("Found spots:")
+	locationSet := gatherLocations(foundEvents)
+
+	addresses := []string{}
+	for loc := range locationSet {
+		addresses = append(addresses, loc)
+	}
+
+	origins := []string{opts.eventLoc, opts.startLoc}
+	addresses = append(origins, addresses...)
+	distances, err := opts.mapService.DistanceMatrix(opts.ctx, &maps.DistanceMatrixRequest{
+		Origins:      origins,
+		Destinations: addresses,
+		Mode:         maps.TravelModeDriving,
+		Units:        maps.UnitsImperial,
+	})
+	if err != nil {
+		log.Fatalf("Unable to retrieve distances: %v", err)
+	}
+
+	eventLocationMap, startLocationMap := sortDistances(origins, distances, addresses)
+
+	locatedEvents := make([]LocatedTimeSlot, len(foundEvents))
+	for i, event := range foundEvents {
+		distance := 0
+
+		if event.ComesAfter != nil {
+
+			distance += eventLocationMap[event.ComesAfter.Location]
+		} else {
+
+			distance += startLocationMap[opts.eventLoc]
+		}
+
+		if event.ComesBefore != nil {
+
+			distance += eventLocationMap[event.ComesBefore.Location]
+		} else {
+
+			distance += eventLocationMap[opts.startLoc]
+		}
+		locatedEvents[i] = LocatedTimeSlot{TimeSlot: event, Distance: distance}
+	}
+
+	slices.SortFunc(locatedEvents, func(i, j LocatedTimeSlot) int {
+		return i.Distance - j.Distance
+	})
+	printEvents(locatedEvents)
+}
+
+func sortDistances(origins []string, distances *maps.DistanceMatrixResponse, addresses []string) (map[string]int, map[string]int) {
+	eventLocationMap := make(map[string]int)
+	startLocationMap := make(map[string]int)
+	for io, or := range origins {
+		for id, dist := range distances.Rows[io].Elements {
+			if dist.Status != "OK" {
+				fmt.Printf("Unable to retrieve distance for %v and %v", or, addresses[id])
+				continue
+			}
+			if io == 0 {
+				eventLocationMap[addresses[id]] = dist.Distance.Meters
+			} else {
+				startLocationMap[addresses[id]] = dist.Distance.Meters
+			}
+			fmt.Println(or + " -> " + addresses[id] + ": " + dist.Distance.HumanReadable)
+		}
+	}
+	return eventLocationMap, startLocationMap
+}
+
+func printEvents(locatedEvents []LocatedTimeSlot) {
+	for i, event := range locatedEvents {
+		fmt.Printf("Spot %v:\n", i+1)
+		fmt.Printf("\tDate: %v\n", event.Date.Time().Format("Monday, January 2, 2006"))
+		fmt.Printf("\tStart: %v\n", event.Start.Format(time.Kitchen))
+		fmt.Printf("\tEnd: %v\n", event.End.Format(time.Kitchen))
+		if event.ComesAfter != nil && event.ComesAfter.Location != "" {
+			fmt.Printf("\tComes after %v\n", event.ComesAfter.Summary)
+		}
+		if event.ComesBefore != nil && event.ComesBefore.Location != "" {
+			fmt.Printf("\tComes before %v\n", event.ComesBefore.Summary)
+		}
+		fmt.Printf("\tAdded Distance: %.2fmi\n", float64(event.Distance)/1609.0)
+	}
+}
+
+func gatherLocations(foundEvents []TimeSlot) map[string]struct{} {
+	count := 1
+	locationSet := make(map[string]struct{})
+	for _, event := range foundEvents {
+		if event.Date.Day == int(time.Sunday) {
+			continue
+		}
+		fmt.Printf("Spot %v:\n", count)
+		fmt.Printf("\tDate: %v\n", event.Date.Time().Format("Monday, January 2, 2006"))
+		fmt.Printf("\tStart: %v\n", event.Start.Format(time.Kitchen))
+		fmt.Printf("\tEnd: %v\n", event.End.Format(time.Kitchen))
+		if event.ComesAfter != nil && event.ComesAfter.Location != "" {
+			fmt.Printf("\tComes after %v\n", event.ComesAfter.Summary)
+			locationSet[event.ComesAfter.Location] = struct{}{}
+		}
+		if event.ComesBefore != nil && event.ComesBefore.Location != "" {
+			fmt.Printf("\tComes before %v\n", event.ComesBefore.Summary)
+			locationSet[event.ComesBefore.Location] = struct{}{}
+		}
+		count++
+	}
+	return locationSet
+}
+
+func getAndPrintCalendars(calendarService *calendar.Service) []string {
+	cals, err := calendarService.CalendarList.List().Do()
+	if err != nil {
+		log.Fatalf("Unable to retrieve calendars: %v", err)
+	}
+	fmt.Println("Available calendars: Description (ID)")
+	ids := make([]string, len(cals.Items))
+	for i, cal := range cals.Items {
+		ids[i] = cal.Id
+		fmt.Printf("%v (%v)\n", cal.Summary, i)
+	}
+	return ids
+}
+
+func sortDays(days Calendar) []Date {
+	sortedDays := make([]Date, len(days))
+	for d, sch := range days {
+		if len(sch.Events) > 0 {
+			sortedDays = append(sortedDays, d)
+		}
+	}
+	slices.SortFunc(sortedDays, func(i, j Date) int {
+		return i.Time().Compare(j.Time())
+	})
+	return sortedDays
+}
+func retrieveEvents(numDays int, calIDs []int, calendarService *calendar.Service, ids []string) ([]*calendar.Event, time.Time) {
+	allEvents := []*calendar.Event{}
+	now := time.Now().Truncate(time.Hour * 24).Add(time.Hour * 24)
+	max := now.AddDate(0, 0, numDays)
+	for _, calID := range calIDs {
+		events, err := calendarService.Events.List(ids[calID]).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).OrderBy("startTime").SingleEvents(true).Do()
+		if err != nil {
+			log.Fatalf("Unable to retrieve events: %v", err)
+		}
+		allEvents = append(allEvents, events.Items...)
+	}
+	return allEvents, now
+}
+
+func readCalendarIds(ids []string) []int {
+	calIDStr, err := readInput("Enter the IDs of the calendars you want to search:\n\t(Comma separated, e.g. 1,2,3):")
+	if err != nil {
+		log.Fatalf("Unable to read input: %v", err)
+	}
+
+	calIDStr = strings.ReplaceAll(calIDStr, " ", "")
+	calIDStrs := strings.Split(calIDStr, ",")
+	calIDs := make([]int, len(calIDStrs))
+	for i, calIDStr := range calIDStrs {
+		calID, err := strconv.Atoi(calIDStr)
+		if err != nil {
+			log.Fatalf("Invalid calendar ID: %v", err)
+		}
+		if calID < 0 || calID >= len(ids) {
+			log.Fatalf("Invalid calendar ID")
+		}
+		calIDs[i] = calID
+	}
+	return calIDs
+}
+
+type LocatedTimeSlot struct {
+	TimeSlot
+	Distance int
+}
+
+type InsertCost struct {
+	*Schedule
+	Cost     time.Duration
+	From, To int
 }
