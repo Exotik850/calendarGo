@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
+	"github.com/joho/godotenv"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/calendar/v3"
 	"googlemaps.github.io/maps"
@@ -128,6 +130,9 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 		token := SessionToken(authCode)
 		calendarService, ok := ss.sessions[token]
 		if !ok {
+			// Remove the cookie if the session is not found
+			cookie.Expires = time.Now().Add(-1 * time.Hour)
+			http.SetCookie(rw, cookie)
 			http.Error(rw, "No session found", http.StatusUnauthorized)
 			return
 		}
@@ -139,7 +144,8 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 		query := Query{}
 		err = decoder.Decode(&query)
 		if err != nil {
-			http.Error(rw, "Unable to parse request", http.StatusBadRequest)
+			fmt.Fprintf(rw, "Please provide the query in the body of the request in the following format: {\"NumDays\": 5, \"EventLoc\": \"New York\", \"StartLoc\": \"San Francisco\", \"Duration\": 2, \"CalIds\": [\"calendar1\", \"calendar2\"]}")
+			http.Error(rw, "Unable to parse request. Please provide the query in the body of the request.", http.StatusBadRequest)
 			return
 		}
 
@@ -162,6 +168,10 @@ func main() {
 
 	// opts := initializeOptions()
 	// findSlots(opts)
+	err := godotenv.Load("./.env")
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 	config := oauthFromEnv()
 	ctx := context.Background()
 	mapSvc := createMapService()
@@ -169,6 +179,7 @@ func main() {
 	http.HandleFunc("/login", loginUser(ss))
 	http.HandleFunc("/authcallback", authCallback(ss))
 	http.HandleFunc("/checkCookies", printCookies)
+	http.HandleFunc("/queryAvailableSlots", queryAvailableSlots(ss))
 	http.Handle("/", staticFileServer())
 	http.ListenAndServe("localhost:8080", nil)
 
