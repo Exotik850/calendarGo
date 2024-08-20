@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -26,7 +25,7 @@ func createMapService() *maps.Client {
 	return mapService
 }
 
-func createCalendarService(ctx context.Context) *calendar.Service {
+func oauthFromEnv() *oauth2.Config {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
 	config := &oauth2.Config{
@@ -36,32 +35,13 @@ func createCalendarService(ctx context.Context) *calendar.Service {
 		Scopes:       []string{calendar.CalendarScope},
 		Endpoint:     google.Endpoint,
 	}
-
-	authCode := getAuthCode(config, 90*time.Second)
-	// authCode, err := loadAuthCode()
-	// if err != nil {
-	// 	log.Println("No auth code found, getting a new one")
-	// 	authCode = getAuthCode(config, 90*time.Second)
-	// 	err = saveAuthCode(authCode)
-	// 	if err != nil {
-	// 		log.Printf("Unable to save authcode: %v", err)
-	// 	}
-	// }
-
-	calendarService := getService(ctx, config, authCode)
-	return calendarService
+	return config
 }
 
 func getService(ctx context.Context, config *oauth2.Config, authCode string) *calendar.Service {
 	token, err := config.Exchange(ctx, authCode)
 	if err != nil {
 		log.Fatalf("Unable to retrieve access token: %v", err)
-		// log.Println("Auth code expired, getting a new one")
-		// authCode = getAuthCode(config, 90*time.Second)
-		// token, err = config.Exchange(ctx, authCode)
-		// if err != nil {
-		// 	log.Fatalf("Unable to retrieve access token: %v", err)
-		// }
 	}
 	client := config.Client(ctx, token)
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
@@ -83,12 +63,15 @@ func loadAuthCode() (string, error) {
 	return string(authCode), nil
 }
 
-func getAuthCode(config *oauth2.Config, timeout time.Duration) string {
+func getAuthCode(config *oauth2.Config, timeout time.Duration, state string) string {
 	ch := make(chan string)
-	randState := fmt.Sprintf("st%d", time.Now().UnixNano())
-	srv := runServer(randState, ch)
+
+	// Starts the callback server
+	srv := runServer(state, ch)
 	defer srv.Shutdown(context.Background())
-	authURL := config.AuthCodeURL(randState)
+
+	// Url that the user goes to
+	authURL := config.AuthCodeURL(state)
 	err := webbrowser.Open(authURL)
 	if err != nil {
 		println("Go to this url:", authURL)

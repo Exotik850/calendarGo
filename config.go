@@ -69,7 +69,8 @@ func initializeOptions() Opts {
 		log.Fatal("Error loading .env file")
 	}
 	ctx := context.Background()
-	calendarService := createCalendarService(ctx)
+	config := oauthFromEnv()
+	calendarService := createCalendarService(ctx, config, "temp")
 	mapService := createMapService()
 	eventLocation, err := readInput("Enter the location you want to search for:")
 	if err != nil {
