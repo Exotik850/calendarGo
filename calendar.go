@@ -141,12 +141,9 @@ func (c Calendar) FindAvailableTimeSlots(start, end Date, duration time.Duration
 	return slots
 }
 
-func findSlots(opts Opts) {
-	ids := getAndPrintCalendars(opts.calendarService)
+func findSlots(opts Opts) []LocatedTimeSlot {
 
-	calIDs := readCalendarIds(ids)
-
-	allEvents, now := retrieveEvents(opts.numDays, calIDs, opts.calendarService, ids)
+	allEvents, now := retrieveEvents(opts.numDays, opts.ids, opts.calendarService)
 
 	days := groupEventsByDay(allEvents)
 
@@ -216,7 +213,7 @@ func findSlots(opts Opts) {
 	slices.SortFunc(locatedEvents, func(i, j LocatedTimeSlot) int {
 		return i.Distance - j.Distance
 	})
-	printEvents(locatedEvents)
+	return locatedEvents
 }
 
 func sortDistances(origins []string, distances *maps.DistanceMatrixResponse, addresses []string) (map[string]int, map[string]int) {
@@ -305,12 +302,12 @@ func sortDays(days Calendar) []Date {
 	})
 	return sortedDays
 }
-func retrieveEvents(numDays int, calIDs []int, calendarService *calendar.Service, ids []string) ([]*calendar.Event, time.Time) {
+func retrieveEvents(numDays int, calIDs []string, calendarService *calendar.Service) ([]*calendar.Event, time.Time) {
 	allEvents := []*calendar.Event{}
 	now := time.Now().Truncate(time.Hour * 24).Add(time.Hour * 24)
 	max := now.AddDate(0, 0, numDays)
-	for _, calID := range calIDs {
-		events, err := calendarService.Events.List(ids[calID]).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).OrderBy("startTime").SingleEvents(true).Do()
+	for _, id := range calIDs {
+		events, err := calendarService.Events.List(id).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).OrderBy("startTime").SingleEvents(true).Do()
 		if err != nil {
 			log.Fatalf("Unable to retrieve events: %v", err)
 		}

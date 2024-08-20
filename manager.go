@@ -2,52 +2,24 @@ package main
 
 import (
 	"context"
-	"log"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"golang.org/x/oauth2"
 	"google.golang.org/api/calendar/v3"
+	"googlemaps.github.io/maps"
 )
 
-type User struct {
-	id      string
-	service *calendar.Service
-}
-
-func starts(randState string, ch chan string) *http.Server {
-	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/favicon.ico" {
-			http.Error(rw, "", http.StatusNotFound)
-			return
-		}
-		query := req.URL.Query()
-		if query.Get("state") != randState {
-			http.Error(rw, "", http.StatusBadRequest)
-			return
-		}
-		code := query.Get("code")
-		if code == "" {
-			http.Error(rw, "", http.StatusBadRequest)
-			return
-		}
-		rw.Write([]byte("Authorized! You can now close this window."))
-		ch <- code
-	})
-	srv := &http.Server{Addr: "localhost:8080", Handler: handler}
-
-	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("ListenAndServe(): %v", err)
-		}
-	}()
-	return srv
-}
+type SessionToken string
+type UserToken string
 
 type ServerState struct {
-	ctx       context.Context
-	userState map[string]*calendar.Service
-	config    *oauth2.Config
+	ctx      context.Context
+	sessions map[SessionToken]*calendar.Service
+	config   *oauth2.Config
+	mapSvc   *maps.Client
 }
 
 func createCalendarService(ctx context.Context, config *oauth2.Config, username string) *calendar.Service {
@@ -56,22 +28,25 @@ func createCalendarService(ctx context.Context, config *oauth2.Config, username 
 	return calendarService
 }
 
+func printCookies(rw http.ResponseWriter, req *http.Request) {
+	for _, cookie := range req.Cookies() {
+		fmt.Fprintf(rw, "Cookie: %s\n", cookie)
+	}
+}
+
 // Give them a link to login
 // Get the auth code from callback to put into cookie
 func loginUser(ss ServerState) func(rw http.ResponseWriter, req *http.Request) {
 	return func(rw http.ResponseWriter, req *http.Request) {
-
 		if cookie, _ := req.Cookie("authCodeEvPlanner"); cookie != nil {
+			fmt.Println("User already logged in")
 			http.Redirect(rw, req, "/", http.StatusFound)
-		}
-
-		username := req.URL.Query().Get("username")
-		if username == "" {
-			http.Error(rw, "No username given", http.StatusBadRequest)
 			return
 		}
-		ss.userState[username] = nil
-		authURL := ss.config.AuthCodeURL(username)
+		randState := fmt.Sprintf("%d", time.Now().UnixNano())
+		authURL := ss.config.AuthCodeURL(randState)
+		token := SessionToken(randState)
+		ss.sessions[token] = nil
 		http.Redirect(rw, req, authURL, http.StatusFound)
 	}
 
@@ -86,21 +61,101 @@ func authCallback(ss ServerState) func(rw http.ResponseWriter, req *http.Request
 			http.Error(rw, "No username or auth code given", http.StatusBadRequest)
 			return
 		}
-		rw.Write([]byte("Authorized! You can now close this window."))
+		token := SessionToken(username)
+		if svc, ok := ss.sessions[token]; ok && svc != nil {
+			http.Redirect(rw, req, "/", http.StatusFound)
+			return
+		}
 		// Place the auth code into the cookie for the user
 		cookie := &http.Cookie{
 			Name:     "authCodeEvPlanner",
 			Value:    authCode,
 			Expires:  time.Now().Add(24 * time.Hour),
 			HttpOnly: true,
+			Secure:   false,
 		}
 		http.SetCookie(rw, cookie)
-		ss.userState[username] = getService(ss.ctx, ss.config, authCode)
+		ss.sessions[token] = getService(ss.ctx, ss.config, authCode)
+		fmt.Println("User", username, "has been authorized")
+		http.Redirect(rw, req, "/", http.StatusFound)
 	}
 }
 
 func staticFileServer() http.Handler {
 	return http.FileServer(http.Dir("./dist"))
+}
+
+type Query struct {
+	NumDays  int
+	EventLoc string
+	StartLoc string
+	Duration time.Duration
+	CalIds   []string
+}
+
+func (q *Query) validate() error {
+	if q.NumDays <= 0 {
+		return fmt.Errorf("Invalid number of days")
+	}
+	if q.EventLoc == "" {
+		return fmt.Errorf("Invalid event location")
+	}
+	if q.StartLoc == "" {
+		return fmt.Errorf("Invalid start location")
+	}
+	if q.Duration <= 0 {
+		return fmt.Errorf("Invalid duration")
+	}
+	if len(q.CalIds) == 0 {
+		return fmt.Errorf("No calendars given")
+	}
+	return nil
+}
+
+func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.Request) {
+	return func(rw http.ResponseWriter, req *http.Request) {
+		cookie, err := req.Cookie("authCodeEvPlanner")
+		if err != nil {
+			// http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			http.Redirect(rw, req, "/login", http.StatusFound)
+			return
+		}
+		authCode := cookie.Value
+		if authCode == "" {
+			http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			return
+		}
+		token := SessionToken(authCode)
+		calendarService, ok := ss.sessions[token]
+		if !ok {
+			http.Error(rw, "No session found", http.StatusUnauthorized)
+			return
+		}
+		body := req.Body
+		defer body.Close()
+
+		// Read the body into a string and parse it into a Query struct
+		decoder := json.NewDecoder(body)
+		query := Query{}
+		err = decoder.Decode(&query)
+		if err != nil {
+			http.Error(rw, "Unable to parse request", http.StatusBadRequest)
+			return
+		}
+
+		// Get the list of available spots
+		availableSpots := findSlots(Opts{
+			numDays:         query.NumDays,
+			eventLoc:        query.EventLoc,
+			startLoc:        query.StartLoc,
+			duration:        query.Duration,
+			ctx:             ss.ctx,
+			calendarService: calendarService,
+			mapService:      ss.mapSvc,
+			ids:             query.CalIds,
+		})
+		fmt.Fprintf(rw, "Available spots: %v", availableSpots)
+	}
 }
 
 func main() {
@@ -109,9 +164,11 @@ func main() {
 	// findSlots(opts)
 	config := oauthFromEnv()
 	ctx := context.Background()
-	ss := ServerState{ctx, make(map[string]*calendar.Service), config}
+	mapSvc := createMapService()
+	ss := ServerState{ctx, make(map[SessionToken]*calendar.Service), config, mapSvc}
 	http.HandleFunc("/login", loginUser(ss))
 	http.HandleFunc("/authcallback", authCallback(ss))
+	http.HandleFunc("/checkCookies", printCookies)
 	http.Handle("/", staticFileServer())
 	http.ListenAndServe("localhost:8080", nil)
 

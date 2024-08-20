@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/joho/godotenv"
 	"google.golang.org/api/calendar/v3"
 	"googlemaps.github.io/maps"
 )
@@ -63,35 +61,35 @@ func LoadConfig(path string) (*Config, error) {
 
 }
 
-func initializeOptions() Opts {
-	err := godotenv.Load("./.env")
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-	ctx := context.Background()
-	config := oauthFromEnv()
-	calendarService := createCalendarService(ctx, config, "temp")
-	mapService := createMapService()
-	eventLocation, err := readInput("Enter the location you want to search for:")
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-	startLocation, err := readInput("Enter the location you want to start from:")
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-	numDays, err := readNumber("Enter the number of days you want to search through:")
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-	numHours, err := readNumber("Enter the number of hours for the event:")
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-	duration := time.Hour * time.Duration(numHours)
-	opts := Opts{ctx, calendarService, mapService, numDays, duration, eventLocation, startLocation}
-	return opts
-}
+// func initializeOptions() Opts {
+// 	err := godotenv.Load("./.env")
+// 	if err != nil {
+// 		log.Fatal("Error loading .env file")
+// 	}
+// 	ctx := context.Background()
+// 	config := oauthFromEnv()
+// 	calendarService := createCalendarService(ctx, config, "temp")
+// 	mapService := createMapService()
+// 	eventLocation, err := readInput("Enter the location you want to search for:")
+// 	if err != nil {
+// 		log.Fatalf("Unable to read input: %v", err)
+// 	}
+// 	startLocation, err := readInput("Enter the location you want to start from:")
+// 	if err != nil {
+// 		log.Fatalf("Unable to read input: %v", err)
+// 	}
+// 	numDays, err := readNumber("Enter the number of days you want to search through:")
+// 	if err != nil {
+// 		log.Fatalf("Unable to read input: %v", err)
+// 	}
+// 	numHours, err := readNumber("Enter the number of hours for the event:")
+// 	if err != nil {
+// 		log.Fatalf("Unable to read input: %v", err)
+// 	}
+// 	duration := time.Hour * time.Duration(numHours)
+// 	opts := Opts{ctx, calendarService, mapService, numDays, duration, eventLocation, startLocation}
+// 	return opts
+// }
 
 type Opts struct {
 	ctx                context.Context
@@ -100,4 +98,5 @@ type Opts struct {
 	numDays            int
 	duration           time.Duration
 	eventLoc, startLoc string
+	ids                []string
 }
