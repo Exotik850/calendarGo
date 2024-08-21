@@ -57,10 +57,25 @@ const (
 	eveningCutoff = 17
 )
 
+func toEvent(e *calendar.Event) Event {
+	if e == nil {
+		return Event{}
+	}
+	return Event{
+		Summary:  e.Summary,
+		Location: e.Location,
+	}
+}
+
+type Event struct {
+	Summary  string
+	Location string
+}
+
 type TimeSlot struct {
 	Date
-	ComesAfter  *calendar.Event
-	ComesBefore *calendar.Event
+	ComesAfter  Event
+	ComesBefore Event
 	Start       time.Time
 	End         time.Time
 }
@@ -81,6 +96,12 @@ func groupEventsByDay(allEvents []*calendar.Event) Calendar {
 		} else {
 			cal[date] = Schedule{Events: []*calendar.Event{e}}
 		}
+	}
+	// Sort the events in each day
+	for _, sch := range cal {
+		sort.Slice(sch.Events, func(i, j int) bool {
+			return sch.Events[i].Start.DateTime < sch.Events[j].Start.DateTime
+		})
 	}
 	return cal
 }
@@ -121,8 +142,8 @@ func (c Calendar) FindAvailableTimeSlots(start, end Date, duration time.Duration
 					Date:        d,
 					Start:       lastEnd,
 					End:         eventStart,
-					ComesAfter:  after,
-					ComesBefore: e,
+					ComesAfter:  toEvent(after),
+					ComesBefore: toEvent(e),
 				})
 			}
 			if eventEnd.After(lastEnd) {
@@ -134,7 +155,7 @@ func (c Calendar) FindAvailableTimeSlots(start, end Date, duration time.Duration
 				Date:       d,
 				Start:      lastEnd,
 				End:        dayEnd,
-				ComesAfter: sch.Events[len(sch.Events)-1],
+				ComesAfter: toEvent(sch.Events[len(sch.Events)-1]),
 			})
 		}
 	}
@@ -147,17 +168,17 @@ func findSlots(opts Opts) []LocatedTimeSlot {
 
 	days := groupEventsByDay(allEvents)
 
-	sortedDays := sortDays(days)
-	for _, d := range sortedDays {
-		day, found := days[d]
-		if !found {
-			continue
-		}
-		fmt.Println(d.Time().Format("Monday, January 2, 2006"))
-		for _, event := range day.Events {
-			fmt.Printf("\t%v\n", event.Summary)
-		}
-	}
+	// sortedDays := sortDays(days)
+	// for _, d := range sortedDays {
+	// 	day, found := days[d]
+	// 	if !found {
+	// 		continue
+	// 	}
+	// 	fmt.Println(d.Time().Format("Monday, January 2, 2006"))
+	// 	for _, event := range day.Events {
+	// 		fmt.Printf("\t%v\n", event.Summary)
+	// 	}
+	// }
 
 	startDate := Date{
 		Year: now.Year(), Month: now.Month(), Day: now.Day() + 1,
@@ -166,7 +187,7 @@ func findSlots(opts Opts) []LocatedTimeSlot {
 
 	foundEvents := days.FindAvailableTimeSlots(startDate, endDate, opts.duration)
 
-	fmt.Println("Found spots:")
+	// fmt.Println("Found spots:")
 	locationSet := gatherLocations(foundEvents)
 
 	addresses := []string{}
@@ -192,7 +213,7 @@ func findSlots(opts Opts) []LocatedTimeSlot {
 	for i, event := range foundEvents {
 		distance := 0
 
-		if event.ComesAfter != nil {
+		if event.ComesAfter.Location != "" {
 
 			distance += eventLocationMap[event.ComesAfter.Location]
 		} else {
@@ -200,7 +221,7 @@ func findSlots(opts Opts) []LocatedTimeSlot {
 			distance += startLocationMap[opts.eventLoc]
 		}
 
-		if event.ComesBefore != nil {
+		if event.ComesBefore.Location != "" {
 
 			distance += eventLocationMap[event.ComesBefore.Location]
 		} else {
@@ -230,7 +251,7 @@ func sortDistances(origins []string, distances *maps.DistanceMatrixResponse, add
 			} else {
 				startLocationMap[addresses[id]] = dist.Distance.Meters
 			}
-			fmt.Println(or + " -> " + addresses[id] + ": " + dist.Distance.HumanReadable)
+			// fmt.Println(or + " -> " + addresses[id] + ": " + dist.Distance.HumanReadable)
 		}
 	}
 	return eventLocationMap, startLocationMap
@@ -242,10 +263,10 @@ func printEvents(locatedEvents []LocatedTimeSlot) {
 		fmt.Printf("\tDate: %v\n", event.Date.Time().Format("Monday, January 2, 2006"))
 		fmt.Printf("\tStart: %v\n", event.Start.Format(time.Kitchen))
 		fmt.Printf("\tEnd: %v\n", event.End.Format(time.Kitchen))
-		if event.ComesAfter != nil && event.ComesAfter.Location != "" {
+		if event.ComesAfter.Location != "" {
 			fmt.Printf("\tComes after %v\n", event.ComesAfter.Summary)
 		}
-		if event.ComesBefore != nil && event.ComesBefore.Location != "" {
+		if event.ComesBefore.Location != "" {
 			fmt.Printf("\tComes before %v\n", event.ComesBefore.Summary)
 		}
 		fmt.Printf("\tAdded Distance: %.2fmi\n", float64(event.Distance)/1609.0)
@@ -253,25 +274,17 @@ func printEvents(locatedEvents []LocatedTimeSlot) {
 }
 
 func gatherLocations(foundEvents []TimeSlot) map[string]struct{} {
-	count := 1
 	locationSet := make(map[string]struct{})
 	for _, event := range foundEvents {
 		if event.Date.Day == int(time.Sunday) {
 			continue
 		}
-		fmt.Printf("Spot %v:\n", count)
-		fmt.Printf("\tDate: %v\n", event.Date.Time().Format("Monday, January 2, 2006"))
-		fmt.Printf("\tStart: %v\n", event.Start.Format(time.Kitchen))
-		fmt.Printf("\tEnd: %v\n", event.End.Format(time.Kitchen))
-		if event.ComesAfter != nil && event.ComesAfter.Location != "" {
-			fmt.Printf("\tComes after %v\n", event.ComesAfter.Summary)
+		if event.ComesAfter.Location != "" {
 			locationSet[event.ComesAfter.Location] = struct{}{}
 		}
-		if event.ComesBefore != nil && event.ComesBefore.Location != "" {
-			fmt.Printf("\tComes before %v\n", event.ComesBefore.Summary)
+		if event.ComesBefore.Location != "" {
 			locationSet[event.ComesBefore.Location] = struct{}{}
 		}
-		count++
 	}
 	return locationSet
 }
@@ -307,7 +320,7 @@ func retrieveEvents(numDays int, calIDs []string, calendarService *calendar.Serv
 	now := time.Now().Truncate(time.Hour * 24).Add(time.Hour * 24)
 	max := now.AddDate(0, 0, numDays)
 	for _, id := range calIDs {
-		events, err := calendarService.Events.List(id).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).OrderBy("startTime").SingleEvents(true).Do()
+		events, err := calendarService.Events.List(id).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).SingleEvents(true).Do()
 		if err != nil {
 			log.Fatalf("Unable to retrieve events: %v", err)
 		}
