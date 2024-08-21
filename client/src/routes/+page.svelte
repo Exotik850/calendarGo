@@ -7,26 +7,41 @@
   let selectedCalendars: string[] = [];
   let numDays = 7;
   let duration = 60; // minutes
-  let eventLocation = '';
-  let startLocation = '';
+  let eventLoc = '';
+  let startLoc = '';
 
-  onMount(async () => {
-    // Fetch available calendars from the server
-    // This is a placeholder - you'll need to implement the actual API call
-    calendars = new Map([
-      ["1", 'Calendar 1'],
-      ["2", 'Calendar 2'],
-      ["3", 'Calendar 3']
-    ]);
-  });
+  // onMount(async () => {
+  //   // Check if the cookie "authCodeEvPlanner" exists
+    
+
+  // });
+
+  async function getCalendars() {
+    const authCode = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('authCodeEvPlanner'))
+      ?.split('=')[1];
+
+    if (!authCode) {
+      // Redirect to the login page
+      console.log('No auth code found. Redirecting to login page');
+      // window.location.href = '/login';
+      return;
+    }
+
+    // Fetch the list of calendars
+    console.log('Fetching list of calendars...');
+    const ids = await fetch('/listCalendars');
+    console.log('Calendar IDs:', await ids.text());
+  }
 
   function handleSubmit() {
     const formData = {
       calendars: selectedCalendars,
       numDays,
       duration,
-      eventLocation,
-      startLocation
+      eventLoc,
+      startLoc
     };
     
     // You'll handle the HTTP request to the Go server here
@@ -66,18 +81,19 @@
     <div>
       <label>
         Event Location:
-        <input type="text" bind:value={eventLocation} placeholder="Enter address">
+        <input type="text" bind:value={eventLoc} placeholder="Enter address">
       </label>
     </div>
 
     <div>
       <label>
         Start Location:
-        <input type="text" bind:value={startLocation} placeholder="Enter address">
+        <input type="text" bind:value={startLoc} placeholder="Enter address">
       </label>
     </div>
 
     <button type="submit">Find Best Spot</button>
+    <button on:mousedown={getCalendars} on:click|preventDefault>Get Calendars</button>
   </form>
 </main>
 

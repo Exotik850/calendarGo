@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,16 +25,20 @@ type ServerState struct {
 	mapSvc   *maps.Client
 }
 
-func createCalendarService(ctx context.Context, config *oauth2.Config, username string) *calendar.Service {
-	authCode := getAuthCode(config, 90*time.Second, username)
-	calendarService := getService(ctx, config, authCode)
-	return calendarService
-}
-
 func printCookies(rw http.ResponseWriter, req *http.Request) {
 	for _, cookie := range req.Cookies() {
 		fmt.Fprintf(rw, "Cookie: %s\n", cookie)
 	}
+}
+
+func randState() string {
+	// Generate a random state for the user
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 // Give them a link to login
@@ -45,11 +50,12 @@ func loginUser(ss ServerState) func(rw http.ResponseWriter, req *http.Request) {
 			http.Redirect(rw, req, "/", http.StatusFound)
 			return
 		}
-		randState := fmt.Sprintf("%d", time.Now().UnixNano())
+		randState := randState()
 		authURL := ss.config.AuthCodeURL(randState)
 		token := SessionToken(randState)
 		ss.sessions[token] = nil
 		http.Redirect(rw, req, authURL, http.StatusFound)
+		fmt.Println("Redirecting to", authURL)
 	}
 
 }
@@ -61,23 +67,34 @@ func authCallback(ss ServerState) func(rw http.ResponseWriter, req *http.Request
 		authCode := query.Get("code")
 		if username == "" || authCode == "" {
 			http.Error(rw, "No username or auth code given", http.StatusBadRequest)
+			fmt.Println("No username or auth code given")
 			return
 		}
 		token := SessionToken(username)
 		if svc, ok := ss.sessions[token]; ok && svc != nil {
+			fmt.Println("Session already exists for user", username)
 			http.Redirect(rw, req, "/", http.StatusFound)
 			return
 		}
 		// Place the auth code into the cookie for the user
+		// TODO Make a flag cookie to tell the user that they are logged in
+		// opposed to making the secret a public cookie
 		cookie := &http.Cookie{
 			Name:     "authCodeEvPlanner",
-			Value:    authCode,
+			Value:    username,
 			Expires:  time.Now().Add(24 * time.Hour),
-			HttpOnly: true,
+			HttpOnly: false,
 			Secure:   false,
+			SameSite: http.SameSiteNoneMode,
 		}
 		http.SetCookie(rw, cookie)
-		ss.sessions[token] = getService(ss.ctx, ss.config, authCode)
+		service := getService(ss.ctx, ss.config, authCode)
+		if service == nil {
+			http.Error(rw, "Unable to create calendar service", http.StatusInternalServerError)
+			fmt.Println("Unable to create calendar service")
+			return
+		}
+		ss.sessions[token] = service
 		fmt.Println("User", username, "has been authorized")
 		http.Redirect(rw, req, "/", http.StatusFound)
 	}
@@ -93,6 +110,25 @@ type Query struct {
 	StartLoc string
 	Duration time.Duration
 	CalIds   []string
+}
+
+// Marshal the query into a json string
+func (q *Query) Marshal() string {
+	b, err := json.Marshal(q)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// Unmarshal the query from a json string
+func (q *Query) Unmarshal(s string) error {
+	// The duration is in minutes
+	err := json.Unmarshal([]byte(s), q)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (q *Query) validate() error {
@@ -119,11 +155,13 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 		cookie, err := req.Cookie("authCodeEvPlanner")
 		if err != nil {
 			// http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			fmt.Println("No auth code found")
 			http.Redirect(rw, req, "/login", http.StatusFound)
 			return
 		}
 		authCode := cookie.Value
 		if authCode == "" {
+			fmt.Println("Auth code is empty")
 			http.Error(rw, "No auth code found", http.StatusUnauthorized)
 			return
 		}
@@ -131,9 +169,10 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 		calendarService, ok := ss.sessions[token]
 		if !ok {
 			// Remove the cookie if the session is not found
+			fmt.Println("No Session found")
 			cookie.Expires = time.Now().Add(-1 * time.Hour)
 			http.SetCookie(rw, cookie)
-			http.Error(rw, "No session found", http.StatusUnauthorized)
+			http.Redirect(rw, req, "/login", http.StatusFound)
 			return
 		}
 		body := req.Body
@@ -164,6 +203,43 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 	}
 }
 
+func listCalendars(ss ServerState) func(rw http.ResponseWriter, req *http.Request) {
+	return func(rw http.ResponseWriter, req *http.Request) {
+		cookie, err := req.Cookie("authCodeEvPlanner")
+		if err != nil {
+			http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			return
+		}
+		authCode := cookie.Value
+		if authCode == "" {
+			http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			return
+		}
+		token := SessionToken(authCode)
+		calendarService, ok := ss.sessions[token]
+		if !ok {
+			http.Error(rw, "No session found", http.StatusUnauthorized)
+			return
+		}
+		cals, err := calendarService.CalendarList.List().Do()
+		if err != nil {
+			http.Error(rw, "Unable to list calendars", http.StatusInternalServerError)
+			return
+		}
+		// Send a json array of the calendar names
+		calendarNames := make(map[string]string, 0)
+		for _, cal := range cals.Items {
+			calendarNames[cal.Summary] = cal.Id
+		}
+		b, err := json.Marshal(calendarNames)
+		if err != nil {
+			http.Error(rw, "Unable to marshal calendar names", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(rw, string(b))
+	}
+}
+
 func main() {
 
 	// opts := initializeOptions()
@@ -180,6 +256,19 @@ func main() {
 	http.HandleFunc("/authcallback", authCallback(ss))
 	http.HandleFunc("/checkCookies", printCookies)
 	http.HandleFunc("/queryAvailableSlots", queryAvailableSlots(ss))
+	http.HandleFunc("/listCalendars", listCalendars(ss))
+	http.HandleFunc("/removecookie", func(rw http.ResponseWriter, req *http.Request) {
+		cookie, err := req.Cookie("authCodeEvPlanner")
+		if err != nil {
+			http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			return
+		}
+		cookie.Expires = time.Now().Add(-1 * time.Hour)
+		cookie.Value = ""
+		cookie.Path = "/"
+		http.SetCookie(rw, cookie)
+		http.Redirect(rw, req, "/", http.StatusFound)
+	})
 	http.Handle("/", staticFileServer())
 	http.ListenAndServe("localhost:8080", nil)
 
