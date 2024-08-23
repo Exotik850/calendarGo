@@ -29,7 +29,7 @@ func oauthFromEnv() *oauth2.Config {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
 	config := &oauth2.Config{
-		RedirectURL:  "http://localhost:8080/authcallback",
+		RedirectURL:  "https://horned.xyz/api/authcallback",
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		Scopes:       []string{calendar.CalendarScope},

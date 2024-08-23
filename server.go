@@ -52,10 +52,13 @@ func randState() string {
 // Get the auth code from callback to put into cookie
 func loginUser(ss ServerState) func(rw http.ResponseWriter, req *http.Request) {
 	return func(rw http.ResponseWriter, req *http.Request) {
-		if cookie, _ := req.Cookie("authCodeEvPlanner"); cookie != nil {
-			fmt.Println("User already logged in")
-			http.Redirect(rw, req, "/", http.StatusFound)
-			return
+		if cookie, _ := req.Cookie("authCodeEvPlanner"); cookie != nil && cookie.Value != "" {
+			// Check if there is a session for the user
+			if _, ok := ss.sessions[SessionToken(cookie.Value)]; ok {
+				fmt.Println("User already logged in")
+				http.Redirect(rw, req, "/", http.StatusFound)
+				return
+			}
 		}
 		randState := randState()
 		authURL := ss.config.AuthCodeURL(randState)

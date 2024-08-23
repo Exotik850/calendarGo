@@ -36,7 +36,7 @@
       window.location.href = "/api/login";
       return;
     }
-    let ids = await fetch("/listCalendars");
+    let ids = await fetch("/api/listCalendars");
     if (ids.status === 401) {
       console.log("Unauthorized. Redirecting to login page");
       window.location.href = "/api/removecookie";
