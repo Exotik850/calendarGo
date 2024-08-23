@@ -33,13 +33,13 @@
     if (!getAuth()) {
       // Redirect to the login page
       console.log("No auth code found. Redirecting to login page");
-      window.location.href = "/login";
+      window.location.href = "/api/login";
       return;
     }
     let ids = await fetch("/listCalendars");
     if (ids.status === 401) {
       console.log("Unauthorized. Redirecting to login page");
-      window.location.href = "/removecookie";
+      window.location.href = "/api/removecookie";
       return;
     }
     if (ids.status !== 200) {
@@ -65,7 +65,7 @@
     if (!getAuth()) {
       // Redirect to the login page
       console.log("No auth code found. Redirecting to login page");
-      window.location.href = "/login";
+      window.location.href = "/api/login";
       return;
     }
 
@@ -78,7 +78,7 @@
     };
 
     // You'll handle the HTTP request to the Go server here
-    let result = await fetch("/queryAvailableSlots", {
+    let result = await fetch("/api/queryAvailableSlots", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -87,7 +87,7 @@
     });
     if (result.status === 401) {
       console.log("Unauthorized. Redirecting to login page");
-      window.location.href = "/removecookie";
+      window.location.href = "/api/removecookie";
       return;
     }
     if (result.status !== 200) {
