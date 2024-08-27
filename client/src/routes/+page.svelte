@@ -137,7 +137,7 @@
   }
 </script>
 
-<main>
+<!-- <main>
   <h1>Event Scheduler</h1>
 
   <form on:submit|preventDefault={handleSubmit}>
@@ -234,5 +234,155 @@
 
   button:hover {
     background-color: #45a049;
+  }
+</style> -->
+
+
+<main>
+  {#if $authStore.isLoading}
+    <div class="loading">Loading...</div>
+  {:else if !$authStore.isAuthenticated}
+    <div class="login-prompt">
+      <p>Please log in to use the Event Scheduler.</p>
+      <a href="/api/login" class="button">Log In</a>
+    </div>
+  {:else}
+    <h1>Event Scheduler</h1>
+
+    <form on:submit|preventDefault={handleSubmit} class="scheduler-form">
+      <div class="form-group">
+        <label for="calendars">Select Calendars:</label>
+        <select id="calendars" multiple bind:value={selectedCalendars}>
+          {#each Object.entries(calendars) as [summary, key] (key)}
+            <option value={key}>{summary}</option>
+          {/each}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="numDays">Number of Days to Search:</label>
+        <input type="range" id="numDays" bind:value={numDays} min="1" max="30" step="1" />
+        <span>{numDays} days</span>
+      </div>
+
+      <div class="form-group">
+        <label for="duration">Event Duration:</label>
+        <input type="range" id="duration" bind:value={duration} min="15" max="240" step="15" />
+        <span>{duration} minutes</span>
+      </div>
+
+      <div class="form-group">
+        <label for="eventLoc">Event Location:</label>
+        <input type="text" id="eventLoc" bind:value={eventLoc} placeholder="Enter address" />
+      </div>
+
+      <div class="form-group">
+        <label for="startLoc">Start Location:</label>
+        <input type="text" id="startLoc" bind:value={startLoc} placeholder="Enter address" />
+      </div>
+
+      <button type="submit" class="button" disabled={$authStore.isLoading}>
+        {$authStore.isLoading ? 'Searching...' : 'Find Best Spot'}
+      </button>
+    </form>
+
+    {#if slots.length > 0}
+      <div class="results">
+        <h2>Available Time Slots:</h2>
+        {#each slots as timeSlot}
+          <TimeSlot {timeSlot} />
+        {/each}
+      </div>
+    {:else if !$authStore.isLoading}
+      <p class="no-results">No available slots found. Try adjusting your search parameters.</p>
+    {/if}
+  {/if}
+</main>
+
+<style>
+  main {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 20px;
+    font-family: Arial, sans-serif;
+  }
+
+  h1 {
+    color: #333;
+    text-align: center;
+  }
+
+  .scheduler-form {
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .form-group {
+    margin-bottom: 20px;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 5px;
+    color: #555;
+  }
+
+  input[type="text"],
+  select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 16px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    margin-top: 5px;
+  }
+
+  select[multiple] {
+    height: 100px;
+  }
+
+  .button {
+    background-color: #4caf50;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    transition-duration: 0.4s;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .button:hover {
+    background-color: #45a049;
+  }
+
+  .button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+  }
+
+  .loading, .login-prompt {
+    text-align: center;
+    margin-top: 50px;
+  }
+
+  .results {
+    margin-top: 30px;
+  }
+
+  .no-results {
+    text-align: center;
+    color: #666;
+    margin-top: 20px;
   }
 </style>
