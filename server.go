@@ -81,14 +81,22 @@ func authCallback(ss ServerState) func(rw http.ResponseWriter, req *http.Request
 			return
 		}
 		token := SessionToken(username)
-		if svc, ok := ss.sessions[token]; ok && svc != nil {
+		svc, ok := ss.sessions[token]
+
+		if !ok {
+			// CSRF state mismatch
+			http.Error(rw, "Invalid state", http.StatusBadRequest)
+			fmt.Println("Invalid state")
+			return
+		}
+
+		if svc != nil {
 			fmt.Println("Session already exists for user", username)
 			http.Redirect(rw, req, "/", http.StatusFound)
 			return
 		}
+
 		// Place the auth code into the cookie for the user
-		// TODO Make a flag cookie to tell the user that they are logged in
-		// opposed to making the secret a public cookie
 		cookie := &http.Cookie{
 			Name:     "authCodeEvPlanner",
 			Value:    username,
