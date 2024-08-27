@@ -5,8 +5,6 @@ import (
 	"log"
 	"slices"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"google.golang.org/api/calendar/v3"
@@ -289,20 +287,6 @@ func gatherLocations(foundEvents []TimeSlot) map[string]struct{} {
 	return locationSet
 }
 
-func getAndPrintCalendars(calendarService *calendar.Service) []string {
-	cals, err := calendarService.CalendarList.List().Do()
-	if err != nil {
-		log.Fatalf("Unable to retrieve calendars: %v", err)
-	}
-	fmt.Println("Available calendars: Description (ID)")
-	ids := make([]string, len(cals.Items))
-	for i, cal := range cals.Items {
-		ids[i] = cal.Id
-		fmt.Printf("%v (%v)\n", cal.Summary, i)
-	}
-	return ids
-}
-
 func sortDays(days Calendar) []Date {
 	sortedDays := make([]Date, len(days))
 	for d, sch := range days {
@@ -322,33 +306,12 @@ func retrieveEvents(numDays int, calIDs []string, calendarService *calendar.Serv
 	for _, id := range calIDs {
 		events, err := calendarService.Events.List(id).TimeMin(now.Format(time.RFC3339)).TimeMax(max.Format(time.RFC3339)).SingleEvents(true).Do()
 		if err != nil {
-			log.Fatalf("Unable to retrieve events: %v", err)
+			fmt.Println("Unable to retrieve events", err)
+			continue
 		}
 		allEvents = append(allEvents, events.Items...)
 	}
 	return allEvents, now
-}
-
-func readCalendarIds(ids []string) []int {
-	calIDStr, err := readInput("Enter the IDs of the calendars you want to search:\n\t(Comma separated, e.g. 1,2,3):")
-	if err != nil {
-		log.Fatalf("Unable to read input: %v", err)
-	}
-
-	calIDStr = strings.ReplaceAll(calIDStr, " ", "")
-	calIDStrs := strings.Split(calIDStr, ",")
-	calIDs := make([]int, len(calIDStrs))
-	for i, calIDStr := range calIDStrs {
-		calID, err := strconv.Atoi(calIDStr)
-		if err != nil {
-			log.Fatalf("Invalid calendar ID: %v", err)
-		}
-		if calID < 0 || calID >= len(ids) {
-			log.Fatalf("Invalid calendar ID")
-		}
-		calIDs[i] = calID
-	}
-	return calIDs
 }
 
 type LocatedTimeSlot struct {

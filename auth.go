@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -20,7 +21,8 @@ func createMapService() *maps.Client {
 	apiKey := os.Getenv("GOOGLE_MAPS_API_KEY")
 	mapService, err := maps.NewClient(maps.WithAPIKey(apiKey))
 	if err != nil {
-		log.Fatalf("Unable to create map service: %v", err)
+		fmt.Println("Unable to create map service", err)
+		return nil
 	}
 	return mapService
 }
@@ -41,12 +43,14 @@ func oauthFromEnv() *oauth2.Config {
 func getService(ctx context.Context, config *oauth2.Config, authCode string) *calendar.Service {
 	token, err := config.Exchange(ctx, authCode)
 	if err != nil {
-		log.Fatalf("Unable to retrieve access token: %v", err)
+		fmt.Println("Unable to exchange auth code for token", err)
+		return nil
 	}
 	client := config.Client(ctx, token)
 	srv, err := calendar.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
-		log.Fatalf("Unable to create Calendar client: %v", err)
+		fmt.Println("Unable to create calendar service", err)
+		return nil
 	}
 	return srv
 }
@@ -79,11 +83,11 @@ func getAuthCode(config *oauth2.Config, timeout time.Duration, state string) str
 
 	select {
 	case <-time.After(timeout):
-		log.Fatal("Timeout")
+		fmt.Println("Timeout while waiting for Auth Code")
+		return ""
 	case authCode := <-ch:
 		return authCode
 	}
-	return ""
 }
 
 func runServer(randState string, ch chan string) *http.Server {
