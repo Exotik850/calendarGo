@@ -2,7 +2,7 @@
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
-const buildLocation = process.env.SITE_BUILD_LOCATION || '../dist';
+const buildLocation = process.env.SITE_BUILD_LOCATION || 'build';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {

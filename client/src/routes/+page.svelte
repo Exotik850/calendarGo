@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import TimeSlot from "../components/TimeSlot.svelte";
+  import { writable } from "svelte/store";
 
   interface Calendar {
     [key: string]: string;
@@ -24,48 +25,49 @@
       ?.split("=")[1];
   }
 
-  // onMount(async () => {
-  //   // Check if the cookie "authCodeEvPlanner" exists
-  //   getCalendars();
-  // });
+  const authStore = writable({
+    isAuthenticated: false,
+    isLoading: true,
+  });
+
+  
+  async function checkAuthStatus() {
+    authStore.set({ isAuthenticated: false, isLoading: true });
+    try {
+      const response = await fetch("/api/authStatus");
+      if (response.ok) {
+        authStore.set({ isAuthenticated: true, isLoading: false });
+        await getCalendars();
+      } else {
+        authStore.set({ isAuthenticated: false, isLoading: false });
+      }
+    } catch (error) {
+      console.error("Error checking auth status:", error);
+      authStore.set({ isAuthenticated: false, isLoading: false });
+    }
+  }
+
+  onMount(async () => {
+    // Check if the cookie "authCodeEvPlanner" exists
+    await checkAuthStatus();
+  });
 
   async function getCalendars() {
-    if (!getAuth()) {
-      // Redirect to the login page
-      console.log("No auth code found. Redirecting to login page");
-      window.location.href = "/api/login";
-      return;
-    }
-    let ids = await fetch("/api/listCalendars");
-    if (ids.status === 401) {
-      console.log("Unauthorized. Redirecting to login page");
-      window.location.href = "/api/removecookie";
-      return;
-    }
-    if (ids.status !== 200) {
-      console.log("Error fetching calendars:", ids);
-      return;
-    }
-    let idJson = await ids.json();
-    for (let [id, value] of Object.entries(idJson)) {
-      if (typeof id !== "string" || typeof value !== "string") {
-        console.log("Invalid calendar entry:", id, value);
-        continue;
+    try {
+      const response = await fetch("/api/listCalendars");
+      if (response.ok) {
+        calendars = await response.json();
+      } else if (response.status === 401) {
+        authStore.set({ isAuthenticated: false, isLoading: false });
       }
-      calendars[id] = value;
+    } catch (error) {
+      console.error("Error fetching calendars:", error);
     }
   }
 
   async function handleSubmit() {
     if (selectedCalendars.length === 0) {
       alert("Please select at least one calendar");
-      return;
-    }
-
-    if (!getAuth()) {
-      // Redirect to the login page
-      console.log("No auth code found. Redirecting to login page");
-      window.location.href = "/api/login";
       return;
     }
 
@@ -77,6 +79,43 @@
       StartLoc: startLoc,
     };
 
+    try {
+      const result = await fetch("/api/queryAvailableSlots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+
+      if (result.ok) {
+        slots = await result.json();
+      } else if (result.status === 401) {
+        authStore.set({ isAuthenticated: false, isLoading: false });
+      } else {
+        console.error("Error fetching available spots:", await result.text());
+      }
+    } catch (error) {
+      console.error("Error submitting form:", error);
+    }
+  }
+
+  async function handleSubmitOld() {
+    if (selectedCalendars.length === 0) {
+      alert("Please select at least one calendar");
+      return;
+    }
+    if (!getAuth()) {
+      // Redirect to the login page
+      console.log("No auth code found. Redirecting to login page");
+      window.location.href = "/api/login";
+      return;
+    }
+    const formData = {
+      CalIds: selectedCalendars,
+      NumDays: numDays,
+      Duration: duration,
+      EventLoc: eventLoc,
+      StartLoc: startLoc,
+    };
     // You'll handle the HTTP request to the Go server here
     let result = await fetch("/api/queryAvailableSlots", {
       method: "POST",
@@ -94,7 +133,6 @@
       console.log("Error fetching available spots:", await result.text());
       return;
     }
-
     slots = await result.json();
   }
 </script>
@@ -104,9 +142,11 @@
 
   <form on:submit|preventDefault={handleSubmit}>
     <div>
-      {#await getCalendars()}
+      {#if $authStore.isLoading}
         <p>Loading calendars...</p>
-      {:then}
+      {:else if !$authStore.isAuthenticated}
+        <a href="/api/login">Login with Google</a>
+      {:else}
         <label>
           Select Calendars:
           <select multiple bind:value={selectedCalendars}>
@@ -115,9 +155,7 @@
             {/each}
           </select>
         </label>
-      {:catch error}
-        <p>Error: {error.message}</p>
-      {/await}
+      {/if}
     </div>
 
     <div>

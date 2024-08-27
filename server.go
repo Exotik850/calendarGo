@@ -92,10 +92,11 @@ func authCallback(ss ServerState) func(rw http.ResponseWriter, req *http.Request
 		cookie := &http.Cookie{
 			Name:     "authCodeEvPlanner",
 			Value:    username,
+			Domain:   "horned.xyz",
 			Expires:  time.Now().Add(24 * time.Hour),
 			HttpOnly: false,
-			Secure:   false,
-			SameSite: http.SameSiteNoneMode,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
 		}
 		http.SetCookie(rw, cookie)
 		service := getService(ss.ctx, ss.config, authCode)
@@ -226,12 +227,13 @@ func listCalendars(ss ServerState) func(rw http.ResponseWriter, req *http.Reques
 	return func(rw http.ResponseWriter, req *http.Request) {
 		cookie, err := req.Cookie("authCodeEvPlanner")
 		if err != nil {
-			http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			// http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			http.Redirect(rw, req, "/login", http.StatusUnauthorized)
 			return
 		}
 		authCode := cookie.Value
 		if authCode == "" {
-			http.Error(rw, "No auth code found", http.StatusUnauthorized)
+			http.Error(rw, "No auth code value", http.StatusUnauthorized)
 			return
 		}
 		token := SessionToken(authCode)
