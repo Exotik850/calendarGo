@@ -208,8 +208,15 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 			return
 		}
 
+		err = query.validate()
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			fmt.Println("Invalid query", err)
+			return
+		}
+
 		// Get the list of available spots
-		availableSpots := findSlots(Opts{
+		availableSpots, err := findSlots(Opts{
 			numDays:         query.NumDays,
 			eventLoc:        query.EventLoc,
 			startLoc:        query.StartLoc,
@@ -219,6 +226,12 @@ func queryAvailableSlots(ss ServerState) func(rw http.ResponseWriter, req *http.
 			mapService:      ss.mapSvc,
 			ids:             query.CalIds,
 		})
+
+		if err != nil {
+			http.Error(rw, "Unable to find available spots: "+err.Error(), http.StatusInternalServerError)
+			fmt.Println("Unable to find available spots", err)
+			return
+		}
 
 		// Send the available spots back to the user as json
 		b, err := json.Marshal(availableSpots)
