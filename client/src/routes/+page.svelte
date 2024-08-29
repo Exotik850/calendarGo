@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import TimeSlot from "../components/TimeSlot.svelte";
   import { writable } from "svelte/store";
+    import toast, { Toaster, type Renderable } from "svelte-french-toast";
 
   interface Calendar {
     [key: string]: string;
@@ -42,9 +43,17 @@
         authStore.set({ isAuthenticated: false, isLoading: false });
       }
     } catch (error) {
-      console.error("Error checking auth status:", error);
+      errorToast("Error checking auth status: " + error);
+      
       authStore.set({ isAuthenticated: false, isLoading: false });
     }
+  }
+
+  function errorToast(message: Renderable) {
+    console.log("Error: ", message);
+    toast.error(message, {
+      duration: 4000,
+    })
   }
 
   onMount(async () => {
@@ -61,13 +70,17 @@
         authStore.set({ isAuthenticated: false, isLoading: false });
       }
     } catch (error) {
-      console.error("Error fetching calendars:", error);
+      errorToast("Error fetching calendars: " + error);
     }
   }
 
   async function handleSubmit() {
     if (selectedCalendars.length === 0) {
-      alert("Please select at least one calendar");
+      // alert("Please select at least one calendar");
+      toast("Please select at least one calendar", {
+        duration: 1500,
+        icon: "📅",
+      });
       return;
     }
 
@@ -88,19 +101,25 @@
 
       if (result.ok) {
         slots = await result.json();
+        console.log("Slots: ", slots);
       } else if (result.status === 401) {
         authStore.set({ isAuthenticated: false, isLoading: false });
       } else {
-        console.error("Error fetching available spots:", await result.text());
+        const text = await result.text();
+        errorToast("Error fetching available spots: " + text);
       }
     } catch (error) {
-      console.error("Error submitting form:", error);
+      errorToast("Error submitting form: " + error);
     }
   }
 
   async function handleSubmitOld() {
     if (selectedCalendars.length === 0) {
-      alert("Please select at least one calendar");
+      // alert("Please select at least one calendar");
+      toast("Please select at least one calendar", {
+        duration: 1500,
+        icon: "📅",
+      });
       return;
     }
     if (!getAuth()) {
@@ -298,6 +317,7 @@
     {/if}
   {/if}
 </main>
+<Toaster />
 
 <style>
   main {
